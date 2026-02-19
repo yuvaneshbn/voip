@@ -1,0 +1,6 @@
+# Set the Qt installation path
+set(Qt6_DIR "C:/Qt/6.10.2/msvc2019_64/lib/cmake/Qt6")
+
+# Add this to your CMake configuration if not already present
+# This ensures CMake can find your Qt installation
+# You may need to adjust the path if you use a different compiler or Qt version
