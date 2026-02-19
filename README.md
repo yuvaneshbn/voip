@@ -1,5 +1,7 @@
 # Nox VoIP (LAN UDP)
 
+LAN-based UDP VoIP application built with Qt 6 (C++17), with a lightweight control server and desktop client for real-time local network voice communication.
+
 Lightweight LAN VoIP application built with Qt 6.
 
 This repository currently ships a **minimal, deployable path**:
