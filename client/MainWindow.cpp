@@ -1,17 +1,17 @@
 #include "MainWindow.h"
-
 #include "ui_MainWindow.h"
-
-#include <QColor>
-#include <QListWidgetItem>
-#include <QSignalBlocker>
-#include <QMetaObject>
-
-#include <algorithm>
-#include <chrono>
-
 #include "AudioEngine.h"
 #include "control_client.h"
+
+#include <QCheckBox>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QMetaObject>
+#include <QPushButton>
+#include <QSignalBlocker>
+#include <QSlider>
+#include <QStatusBar>
 
 namespace {
 constexpr int kRoleClientId = Qt::UserRole + 1;

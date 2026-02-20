@@ -10,23 +10,17 @@
  * https://www.cs.ucdavis.edu/~rogaway/ocb/ocb-faq.htm
  */
 
-#include <QtCore/QtGlobal>
 
 #ifndef __LP64__
 #	ifdef Q_OS_WIN
-#		include "win.h"
+#		include "shared/win.h"
 #		include <winsock2.h>
 #	else
 #		include <arpa/inet.h>
 #	endif
 #endif
 
-#include "ByteSwap.h"
-#include "CryptStateOCB2.h"
-#include "CryptographicRandom.h"
 
-#include <cstring>
-#include <openssl/rand.h>
 
 CryptStateOCB2::CryptStateOCB2()
 	: CryptState(), enc_ctx_ocb_enc(EVP_CIPHER_CTX_new()), dec_ctx_ocb_enc(EVP_CIPHER_CTX_new()),

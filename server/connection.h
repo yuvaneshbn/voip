@@ -7,7 +7,7 @@
 #include <QtCore/QtGlobal>
 
 #ifdef Q_OS_WIN
-#	include "win.h"
+#	include "shared/win.h"
 #endif
 
 #include "crypto/CryptState.h"

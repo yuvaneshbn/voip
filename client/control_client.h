@@ -1,14 +1,7 @@
 #pragma once
 
-#include <QObject>
-#include <QByteArray>
-#include <QHostAddress>
 #include <QUdpSocket>
 
-#include <cstdint>
-#include <functional>
-#include <string>
-#include <vector>
 
 #include "shared/protocol/control_protocol.h"
 

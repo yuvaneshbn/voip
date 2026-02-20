@@ -6,13 +6,8 @@
 #ifndef NOX_CRYPTSTATE_H_
 #define NOX_CRYPTSTATE_H_
 
-#include <QtGlobal>
 
-#include "Timer.h"
 
-#include <chrono>
-#include <queue>
-#include <string>
 
 struct PacketStats {
 	unsigned int good   = 0;

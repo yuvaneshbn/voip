@@ -5,11 +5,11 @@
 #include <QtCore/QtGlobal>
 
 #ifdef Q_OS_WIN
-#	include "win.h"
+#	include "shared/win.h"
 #endif
 
-#include "ACL.h"
-#include "AudioReceiverBuffer.h"
+#include "shared/ACL.h"
+#include "shared/AudioReceiverBuffer.h"
 #include "Ban.h"
 #include "ChannelListenerManager.h"
 #include "DBWrapper.h"
@@ -17,10 +17,10 @@
 #include "Nox.pb.h"
 #include "NoxProtocol.h"
 #include "QtUtils.h"
-#include "Timer.h"
+#include "shared/Timer.h"
 #include "User.h"
-#include "Version.h"
-#include "VolumeAdjustment.h"
+#include "shared/Version.h"
+#include "shared/VolumeAdjustment.h"
 
 #include "database/ConnectionParameter.h"
 
@@ -335,7 +335,7 @@ public:
 	bool hasPermission(ServerUser *p, Channel *c, QFlags< ChanACL::Perm > perm);
 	QFlags< ChanACL::Perm > effectivePermissions(ServerUser *p, Channel *c);
 	void sendClientPermission(ServerUser *u, Channel *c, bool explicitlyRequested = false);
-	void flushClientPermissionCache(ServerUser *u, MumbleProto::PermissionQuery &mpqq);
+	void flushClientPermissionCache(ServerUser *u, NoxProto::PermissionQuery &mpqq);
 	void clearACLCache(User *p = nullptr);
 	void clearWhisperTargetCache();
 
@@ -347,21 +347,21 @@ public:
 
 	// sendAll sends a protobuf message to all users on the server whose version is either bigger than v or
 	// lower than ~v. If v == 0 the message is sent to everyone.
-#define PROCESS_MUMBLE_TCP_MESSAGE(name, value)                                                        \
-	void sendAll(const MumbleProto::name &msg, Version::full_t v = Version::UNKNOWN,                   \
+#define PROCESS_NOX_TCP_MESSAGE(name, value)                                                        \
+	void sendAll(const NoxProto::name &msg, Version::full_t v = Version::UNKNOWN,                   \
 				 Version::CompareMode mode = Version::CompareMode::AtLeast) {                          \
 		sendProtoAll(msg, Mumble::Protocol::TCPMessageType::name, v, mode);                            \
 	}                                                                                                  \
-	void sendExcept(ServerUser *u, const MumbleProto::name &msg, Version::full_t v = Version::UNKNOWN, \
+	void sendExcept(ServerUser *u, const NoxProto::name &msg, Version::full_t v = Version::UNKNOWN, \
 					Version::CompareMode mode = Version::CompareMode::AtLeast) {                       \
 		sendProtoExcept(u, msg, Mumble::Protocol::TCPMessageType::name, v, mode);                      \
 	}                                                                                                  \
-	void sendMessage(ServerUser *u, const MumbleProto::name &msg) {                                    \
+	void sendMessage(ServerUser *u, const NoxProto::name &msg) {                                    \
 		sendProtoMessage(u, msg, Mumble::Protocol::TCPMessageType::name);                              \
 	}
 
 	MUMBLE_ALL_TCP_MESSAGES
-#undef PROCESS_MUMBLE_TCP_MESSAGE
+#undef PROCESS_NOX_TCP_MESSAGE
 
 	static void hashAssign(QString &destination, QByteArray &hash, const QString &str);
 	static void hashAssign(QByteArray &destination, QByteArray &hash, const QByteArray &source);
@@ -376,7 +376,7 @@ public:
 
 	void removeChannel(unsigned int id);
 	void removeChannel(Channel *c, Channel *dest = nullptr);
-	void userEnterChannel(User *u, Channel *c, MumbleProto::UserState &mpus);
+	void userEnterChannel(User *u, Channel *c, NoxProto::UserState &mpus);
 	bool unregisterUser(int id);
 
 	Server(unsigned int snum, const ::mumble::db::ConnectionParameter &connectionParam, QObject *parent = nullptr);
@@ -456,7 +456,7 @@ signals:
 	void channelCreated(const Channel *);
 	void channelRemoved(const Channel *);
 
-	void textMessageFilterSig(int &, const User *, MumbleProto::TextMessage &);
+	void textMessageFilterSig(int &, const User *, NoxProto::TextMessage &);
 
 	void contextAction(const User *, const QString &, unsigned int, int);
 
@@ -474,9 +474,10 @@ public:
 	bool isChannelFull(Channel *c, ServerUser *u = 0);
 
 	// Implementation in Messages.cpp
-#define PROCESS_MUMBLE_TCP_MESSAGE(name, value) void msg##name(ServerUser *, MumbleProto::name &);
+#define PROCESS_NOX_TCP_MESSAGE(name, value) void msg##name(ServerUser *, NoxProto::name &);
 	MUMBLE_ALL_TCP_MESSAGES
-#undef PROCESS_MUMBLE_TCP_MESSAGE
+#undef PROCESS_NOX_TCP_MESSAGE
 };
 
 #endif
+

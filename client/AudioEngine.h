@@ -1,11 +1,7 @@
 #pragma once
 
 #include <QAudioFormat>
-#include <QByteArray>
-#include <QObject>
 
-#include <functional>
-#include <memory>
 
 QT_BEGIN_NAMESPACE
 class QAudioSink;

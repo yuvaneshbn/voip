@@ -5,7 +5,6 @@
 #include <QAudioSource>
 #include <QDebug>
 #include <QMediaDevices>
-#include <QIODevice>
 
 namespace {
 constexpr int kSampleRate = 48000;

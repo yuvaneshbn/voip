@@ -1,9 +1,5 @@
 // 📁 client/EchoCanceller.cpp
 // ECHO CANCELLATION IMPLEMENTATION
-#include "EchoCanceller.h"
-#include <cstring>
-#include <cmath>
-#include <iostream>
 
 EchoCanceller::EchoCanceller()
     : echo_write_pos_(0),

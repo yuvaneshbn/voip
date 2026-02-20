@@ -1,20 +1,6 @@
 
-#include "AudioInput.h"
 
-#include "API.h"
-#include "AudioOutput.h"
-#include "MainWindow.h"
-#include "MumbleProtocol.h"
-#include "NetworkConfig.h"
-#include "PacketDataStream.h"
-#include "PluginManager.h"
-#include "ServerHandler.h"
-#include "User.h"
-#include "Utils.h"
-#include "VoiceRecorder.h"
-#include "Global.h"
 
-#include <opus.h>
 
 #ifdef USE_RNNOISE
 extern "C" {
@@ -22,12 +8,6 @@ extern "C" {
 }
 #endif
 
-#include <algorithm>
-#include <cassert>
-#include <chrono>
-#include <exception>
-#include <limits>
-#include <span>
 
 #ifdef USE_RNNOISE
 /// Clip the given float value to a range that can be safely converted into a short (without causing integer overflow)

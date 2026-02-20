@@ -1,8 +1,5 @@
 #include "control_client.h"
 
-#include <QEventLoop>
-#include <QDebug>
-#include <QJsonArray>
 #include <QTimer>
 
 ControlClient::ControlClient(QObject *parent)

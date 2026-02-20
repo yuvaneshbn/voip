@@ -2,23 +2,13 @@
 #ifndef NOX_CONNECTION_H_
 #define NOX_CONNECTION_H_
 
-#include "NoxProtocol.h"
 
-#include <QtCore/QtGlobal>
 
 #ifdef Q_OS_WIN
-#	include "win.h"
+#	include "shared/win.h"
 #endif
 
-#include "crypto/CryptState.h"
-#include "crypto/CryptStateOCB2.h"
 
-#include <QtCore/QElapsedTimer>
-#include <QtCore/QList>
-#include <QtCore/QMutex>
-#include <QtCore/QObject>
-#include <QtNetwork/QSslSocket>
-#include <memory>
 
 #ifdef Q_OS_WIN
 #	include <ws2tcpip.h>

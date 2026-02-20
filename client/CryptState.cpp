@@ -3,7 +3,6 @@
 // that can be found in the LICENSE file at the root of the
 // Nox source tree or at <https://www.nox.info/LICENSE>.
 
-#include "CryptState.h"
 
 void CryptState::updateRollingStats() {
 	if (!m_rollingStatsEnabled) {

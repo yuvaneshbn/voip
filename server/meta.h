@@ -2,15 +2,15 @@
 #ifndef MUMBLE_MURMUR_META_H_
 #define MUMBLE_MURMUR_META_H_
 
-#include "DBState.h"
+#include "shared/DBState.h"
 #include "DBWrapper.h"
-#include "Timer.h"
-#include "Version.h"
+#include "shared/Timer.h"
+#include "shared/Version.h"
 
 #include "database/ConnectionParameter.h"
 
 #ifdef Q_OS_WIN
-#	include "win.h"
+#	include "shared/win.h"
 #endif
 
 #include <QtCore/QDir>

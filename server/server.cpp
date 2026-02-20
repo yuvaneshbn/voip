@@ -1,10 +1,10 @@
 #include "Server.h"
 
-#include "ACL.h"
+#include "shared/ACL.h"
 #include "Channel.h"
 #include "ClientType.h"
 #include "Connection.h"
-#include "DBState.h"
+#include "shared/DBState.h"
 #include "EnvUtils.h"
 #include "Group.h"
 #include "HTMLFilter.h"
@@ -18,7 +18,7 @@
 #include "QtUtils.h"
 #include "ServerUser.h"
 #include "User.h"
-#include "Version.h"
+#include "shared/Version.h"
 
 #ifdef USE_ZEROCONF
 #	include "Zeroconf.h"
@@ -498,7 +498,7 @@ void Server::setLiveConf(const QString &key, const QString &value) {
 		int length = i ? i : Meta::mp->iMaxBandwidth;
 		if (length != iMaxBandwidth) {
 			iMaxBandwidth = length;
-			MumbleProto::ServerConfig mpsc;
+			NoxProto::ServerConfig mpsc;
 			mpsc.set_max_bandwidth(static_cast< unsigned int >(length));
 			sendAll(mpsc);
 		}
@@ -513,7 +513,7 @@ void Server::setLiveConf(const QString &key, const QString &value) {
 			if (!qhUsers.contains(id))
 				qqIds.enqueue(id);
 
-		MumbleProto::ServerConfig mpsc;
+		NoxProto::ServerConfig mpsc;
 		mpsc.set_max_users(iMaxUsers);
 		sendAll(mpsc);
 	} else if (key == "usersperchannel")
@@ -522,7 +522,7 @@ void Server::setLiveConf(const QString &key, const QString &value) {
 		int length = i ? i : Meta::mp->iMaxTextMessageLength;
 		if (length != iMaxTextMessageLength) {
 			iMaxTextMessageLength = length;
-			MumbleProto::ServerConfig mpsc;
+			NoxProto::ServerConfig mpsc;
 			mpsc.set_message_length(static_cast< unsigned int >(length));
 			sendAll(mpsc);
 		}
@@ -530,7 +530,7 @@ void Server::setLiveConf(const QString &key, const QString &value) {
 		int length = i ? i : Meta::mp->iMaxImageMessageLength;
 		if (length != iMaxImageMessageLength) {
 			iMaxImageMessageLength = length;
-			MumbleProto::ServerConfig mpsc;
+			NoxProto::ServerConfig mpsc;
 			mpsc.set_image_message_length(static_cast< unsigned int >(length));
 			sendAll(mpsc);
 		}
@@ -538,7 +538,7 @@ void Server::setLiveConf(const QString &key, const QString &value) {
 		bool allow = !v.isNull() ? QVariant(v).toBool() : Meta::mp->bAllowHTML;
 		if (allow != bAllowHTML) {
 			bAllowHTML = allow;
-			MumbleProto::ServerConfig mpsc;
+			NoxProto::ServerConfig mpsc;
 			mpsc.set_allow_html(bAllowHTML);
 			sendAll(mpsc);
 		}
@@ -561,7 +561,7 @@ void Server::setLiveConf(const QString &key, const QString &value) {
 		if (text != qsRegName) {
 			qsRegName = text;
 			if (!qsRegName.isEmpty()) {
-				MumbleProto::ChannelState mpcs;
+				NoxProto::ChannelState mpcs;
 				mpcs.set_channel_id(0);
 				mpcs.set_name(u8(qsRegName));
 				sendAll(mpcs);
@@ -1495,8 +1495,8 @@ void Server::newClient() {
 void Server::encrypted() {
 	ServerUser *uSource = qobject_cast< ServerUser * >(sender());
 
-	MumbleProto::Version mpv;
-	MumbleProto::setVersion(mpv, Version::get());
+	NoxProto::Version mpv;
+	NoxProto::setVersion(mpv, Version::get());
 	if (Meta::mp->bSendVersion) {
 		mpv.set_release(u8(Version::getRelease()));
 		mpv.set_os(u8(meta->qsOS));
@@ -1644,7 +1644,7 @@ void Server::connectionClosed(QAbstractSocket::SocketError err, const QString &r
 			}
 		}
 
-		MumbleProto::UserRemove mpur;
+		NoxProto::UserRemove mpur;
 		mpur.set_session(u->uiSession);
 		sendExcept(u, mpur);
 
@@ -1767,9 +1767,9 @@ void Server::message(Mumble::Protocol::TCPMessageType type, const QByteArray &qb
 			// In case the user is authenticated as a registered user, a DB update can occur, which is
 			// why we have to block connections from new clients in read-only mode.
 			case Mumble::Protocol::TCPMessageType::Authenticate: {
-				MumbleProto::Reject mpr;
+				NoxProto::Reject mpr;
 				mpr.set_reason("The server is currently in read-only mode and doesn't accept new connections");
-				mpr.set_type(MumbleProto::Reject_RejectType_NoNewConnections);
+				mpr.set_type(NoxProto::Reject_RejectType_NoNewConnections);
 				sendMessage(u, mpr);
 				u->disconnectSocket();
 			}
@@ -1783,9 +1783,9 @@ void Server::message(Mumble::Protocol::TCPMessageType type, const QByteArray &qb
 	}
 
 #ifdef QT_NO_DEBUG
-#	define PROCESS_MUMBLE_TCP_MESSAGE(name, value)                                          \
+#	define PROCESS_NOX_TCP_MESSAGE(name, value)                                          \
 		case Mumble::Protocol::TCPMessageType::name: {                                       \
-			MumbleProto::name msg;                                                           \
+			NoxProto::name msg;                                                           \
 			if (msg.ParseFromArray(qbaMsg.constData(), static_cast< int >(qbaMsg.size()))) { \
 				msg.DiscardUnknownFields();                                                  \
 				msg##name(u, msg);                                                           \
@@ -1793,9 +1793,9 @@ void Server::message(Mumble::Protocol::TCPMessageType type, const QByteArray &qb
 			break;                                                                           \
 		}
 #else
-#	define PROCESS_MUMBLE_TCP_MESSAGE(name, value)                                          \
+#	define PROCESS_NOX_TCP_MESSAGE(name, value)                                          \
 		case Mumble::Protocol::TCPMessageType::name: {                                       \
-			MumbleProto::name msg;                                                           \
+			NoxProto::name msg;                                                           \
 			if (msg.ParseFromArray(qbaMsg.constData(), static_cast< int >(qbaMsg.size()))) { \
 				if (type != Mumble::Protocol::TCPMessageType::Ping) {                        \
 					printf("== %s:\n", #name);                                               \
@@ -1810,7 +1810,7 @@ void Server::message(Mumble::Protocol::TCPMessageType type, const QByteArray &qb
 
 	switch (type) { MUMBLE_ALL_TCP_MESSAGES }
 
-#undef PROCESS_MUMBLE_TCP_MESSAGE
+#undef PROCESS_NOX_TCP_MESSAGE
 }
 
 void Server::checkTimeout() {
@@ -1851,7 +1851,7 @@ void Server::doSync(unsigned int id) {
 	ServerUser *u = qhUsers.value(id);
 	if (u) {
 		log(u, "Requesting crypt-nonce resync");
-		MumbleProto::CryptSetup mpcs;
+		NoxProto::CryptSetup mpcs;
 		sendMessage(u, mpcs);
 	}
 }
@@ -1916,7 +1916,7 @@ void Server::removeChannel(Channel *chan, Channel *dest) {
 				   || isChannelFull(target, static_cast< ServerUser * >(p))))
 			target = target->cParent;
 
-		MumbleProto::UserState mpus;
+		NoxProto::UserState mpus;
 		mpus.set_session(p->uiSession);
 		mpus.set_channel_id(target->iId);
 		userEnterChannel(p, target, mpus);
@@ -1933,14 +1933,14 @@ void Server::removeChannel(Channel *chan, Channel *dest) {
 		deleteChannelListener(*user, *chan);
 
 		// Notify that all clients that have been listening to this channel, will do so no more
-		MumbleProto::UserState mpus;
+		NoxProto::UserState mpus;
 		mpus.set_session(user->uiSession);
 		mpus.add_listening_channel_remove(chan->iId);
 
 		sendAll(mpus);
 	}
 
-	MumbleProto::ChannelRemove mpcr;
+	NoxProto::ChannelRemove mpcr;
 	mpcr.set_channel_id(chan->iId);
 	sendAll(mpcr);
 
@@ -2006,7 +2006,7 @@ bool Server::unregisterUser(int id) {
 	for (ServerUser *u : qhUsers) {
 		if (u->iId == id) {
 			clearACLCache(u);
-			MumbleProto::UserState mpus;
+			NoxProto::UserState mpus;
 			mpus.set_session(u->uiSession);
 			// NOTE: We are assuming that the integer representation on the receiving end's machine is the same as on
 			// our machine in order to guarantee that back-casting the unsigned ID to a signed one will give back the
@@ -2023,7 +2023,7 @@ bool Server::unregisterUser(int id) {
 	return true;
 }
 
-void Server::userEnterChannel(User *p, Channel *c, MumbleProto::UserState &mpus) {
+void Server::userEnterChannel(User *p, Channel *c, NoxProto::UserState &mpus) {
 	if (p->cChannel == c)
 		return;
 
@@ -2100,7 +2100,7 @@ void Server::sendClientPermission(ServerUser *u, Channel *c, bool explicitlyRequ
 		// been informed about permission for this channel.
 		u->qmPermissionSent.insert(static_cast< int >(c->iId), perm);
 
-		MumbleProto::PermissionQuery mppq;
+		NoxProto::PermissionQuery mppq;
 		mppq.set_channel_id(c->iId);
 		mppq.set_permissions(perm);
 
@@ -2116,7 +2116,7 @@ void Server::sendClientPermission(ServerUser *u, Channel *c, bool explicitlyRequ
  * guess.
  */
 
-void Server::flushClientPermissionCache(ServerUser *u, MumbleProto::PermissionQuery &mppq) {
+void Server::flushClientPermissionCache(ServerUser *u, NoxProto::PermissionQuery &mppq) {
 	bool match = (u->qmPermissionSent.count() < 20);
 	for (auto i = u->qmPermissionSent.constBegin(); (match && (i != u->qmPermissionSent.constEnd())); ++i) {
 		Channel *c = qhChannels.value(static_cast< unsigned int >(i.key()));
@@ -2154,7 +2154,7 @@ void Server::flushClientPermissionCache(ServerUser *u, MumbleProto::PermissionQu
 }
 
 void Server::clearACLCache(User *p) {
-	MumbleProto::PermissionQuery mppq;
+	NoxProto::PermissionQuery mppq;
 
 	{
 		QMutexLocker qml(&qmCache);
@@ -2178,7 +2178,7 @@ void Server::clearACLCache(User *p) {
 		}
 
 		// A change in ACLs could also change a user's suppression state
-		MumbleProto::UserState mpus;
+		NoxProto::UserState mpus;
 		auto processingFunction = [&](ServerUser *user) {
 			bool maySpeak = ChanACL::hasPermission(user, user->cChannel, ChanACL::Speak, &acCache);
 
@@ -2334,7 +2334,7 @@ void Server::recheckCodecVersions(ServerUser *connectingUser) {
 
 	bOpus = enableOpus;
 
-	MumbleProto::CodecVersion mpcv;
+	NoxProto::CodecVersion mpcv;
 	mpcv.set_alpha(iCodecAlpha);
 	mpcv.set_beta(iCodecBeta);
 	mpcv.set_prefer_alpha(bPreferAlpha);
@@ -3218,3 +3218,4 @@ bool Server::isValidUserID(int userID) {
 
 #undef SIO_UDP_CONNRESET
 #undef SENDTO
+

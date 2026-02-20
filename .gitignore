@@ -1,6 +1,7 @@
 # Build directories
 /build*/
 /cmake-build-*/
+/dist/
 
 # CMake generated files
 /CMakeCache.txt

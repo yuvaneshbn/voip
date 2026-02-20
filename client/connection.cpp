@@ -1,9 +1,4 @@
-#include "Connection.h"
-#include "Mumble.pb.h"
-#include "SSL.h"
 
-#include <QtCore/QtEndian>
-#include <QtNetwork/QHostAddress>
 
 #ifdef Q_OS_WIN
 #	include <qos2.h>
@@ -250,3 +245,4 @@ void Connection::setQoS(HANDLE hParentQoS) {
 	hQoS = hParentQoS;
 }
 #endif
+

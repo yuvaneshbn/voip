@@ -1,18 +1,17 @@
-// Copyright The Mumble Developers. All rights reserved.
+// Copyright The Nox Developers. All rights reserved.
 // Use of this source code is governed by a BSD-style license
 // that can be found in the LICENSE file at the root of the
-// Mumble source tree or at <https://www.mumble.info/LICENSE>.
+// Nox source tree or at <https://www.nox.info/LICENSE>.
 
-#ifndef MUMBLE_CRYPTSTATEOCB2_H
-#define MUMBLE_CRYPTSTATEOCB2_H
+#ifndef NOX_CRYPTSTATEOCB2_H
+#define NOX_CRYPTSTATEOCB2_H
 
-#include "CryptState.h"
 
-#include <openssl/evp.h>
 
 #define AES_BLOCK_SIZE 16
 #define AES_KEY_SIZE_BITS 128
 #define AES_KEY_SIZE_BYTES (AES_KEY_SIZE_BITS / 8)
+
 
 class CryptStateOCB2 : public CryptState {
 public:
@@ -49,4 +48,5 @@ private:
 	EVP_CIPHER_CTX *dec_ctx_ocb_dec;
 };
 
-#endif // MUMBLE_CRYPTSTATEOCB2_H
+
+#endif // NOX_CRYPTSTATEOCB2_H

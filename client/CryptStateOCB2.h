@@ -6,9 +6,7 @@
 #ifndef NOX_CRYPTSTATEOCB2_H
 #define NOX_CRYPTSTATEOCB2_H
 
-#include "CryptState.h"
 
-#include <openssl/evp.h>
 
 #define AES_BLOCK_SIZE 16
 #define AES_KEY_SIZE_BITS 128

@@ -1,16 +1,12 @@
 #ifndef AUDIOOUTPUT_H_
 #define AUDIOOUTPUT_H_
 
-#include <QtCore/QObject>
-#include <QtCore/QThread>
 
-#include "NoxProtocol.h"
 
 #ifdef USE_MANUAL_PLUGIN
 #	include "ManualPlugin.h"
 #endif
 
-#include <memory>
 
 #ifndef SPEAKER_FRONT_LEFT
 #	define SPEAKER_FRONT_LEFT 0x1
@@ -33,7 +29,6 @@
 #	define SPEAKER_TOP_BACK_RIGHT 0x20000
 #endif
 
-#include "../shared/Audio.h"
 
 class AudioOutput;
 class ClientUser;

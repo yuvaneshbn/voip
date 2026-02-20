@@ -5,14 +5,14 @@
 #include <QtCore/QtGlobal>
 
 #ifdef Q_OS_WIN
-#	include "win.h"
+#	include "shared/win.h"
 #endif
 
 #include "ClientType.h"
 #include "Connection.h"
 #include "HostAddress.h"
 #include "ServerUserInfo.h"
-#include "Timer.h"
+#include "shared/Timer.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QStringList>

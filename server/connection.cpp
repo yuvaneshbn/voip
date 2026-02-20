@@ -1,5 +1,5 @@
 #include "Connection.h"
-#include "Mumble.pb.h"
+#include "Nox.pb.h"
 #include "SSL.h"
 
 #include <QtCore/QtEndian>
@@ -250,3 +250,4 @@ void Connection::setQoS(HANDLE hParentQoS) {
 	hQoS = hParentQoS;
 }
 #endif
+

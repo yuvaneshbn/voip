@@ -1027,7 +1027,7 @@ void ServerHandler::requestACL(unsigned int channel) {
 }
 
 void ServerHandler::registerUser(unsigned int uiSession) {
-	MumbleProto::UserState mpus;
+	NoxProto::UserState mpus;
 	mpus.set_session(uiSession);
 	mpus.set_user_id(0);
 	sendMessage(mpus);
@@ -1073,7 +1073,7 @@ void ServerHandler::sendChannelTextMessage(unsigned int channel, const QString &
 }
 
 void ServerHandler::setUserComment(unsigned int uiSession, const QString &comment) {
-	MumbleProto::UserState mpus;
+	NoxProto::UserState mpus;
 	mpus.set_session(uiSession);
 	mpus.set_comment(u8(comment));
 	sendMessage(mpus);
@@ -1126,7 +1126,7 @@ void ServerHandler::setUserTexture(unsigned int uiSession, const QByteArray &qba
 		texture = qCompress(QByteArray(reinterpret_cast< const char * >(img.bits()), TEX_RGBA_SIZE));
 	}
 
-	MumbleProto::UserState mpus;
+	NoxProto::UserState mpus;
 	mpus.set_session(uiSession);
 	mpus.set_texture(blob(texture));
 	sendMessage(mpus);
@@ -1151,14 +1151,14 @@ void ServerHandler::removeChannel(unsigned int channel) {
 }
 
 void ServerHandler::addChannelLink(unsigned int channel, unsigned int link) {
-	MumbleProto::ChannelState mpcs;
+	NoxProto::ChannelState mpcs;
 	mpcs.set_channel_id(channel);
 	mpcs.add_links_add(link);
 	sendMessage(mpcs);
 }
 
 void ServerHandler::removeChannelLink(unsigned int channel, unsigned int link) {
-	MumbleProto::ChannelState mpcs;
+	NoxProto::ChannelState mpcs;
 	mpcs.set_channel_id(channel);
 	mpcs.add_links_remove(link);
 	sendMessage(mpcs);
@@ -1171,14 +1171,14 @@ void ServerHandler::requestChannelPermissions(unsigned int channel) {
 }
 
 void ServerHandler::setSelfMuteDeafState(bool mute, bool deaf) {
-	MumbleProto::UserState mpus;
+	NoxProto::UserState mpus;
 	mpus.set_self_mute(mute);
 	mpus.set_self_deaf(deaf);
 	sendMessage(mpus);
 }
 
 void ServerHandler::announceRecordingState(bool recording) {
-	MumbleProto::UserState mpus;
+	NoxProto::UserState mpus;
 	mpus.set_recording(recording);
 	sendMessage(mpus);
 }
@@ -1200,3 +1200,4 @@ QUrl ServerHandler::getServerURL(bool withPassword) const {
 
 	return url;
 }
+

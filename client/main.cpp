@@ -1,11 +1,8 @@
 #include <QApplication>
-#include <QHostAddress>
 #include <QInputDialog>
-#include <QLineEdit>
 #include <QMessageBox>
 #include <QNetworkInterface>
 
-#include <chrono>
 #include <thread>
 
 #include "MainWindow.h"

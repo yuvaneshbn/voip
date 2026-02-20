@@ -1,18 +1,13 @@
-// Copyright The Mumble Developers. All rights reserved.
+// Copyright The Nox Developers. All rights reserved.
 // Use of this source code is governed by a BSD-style license
 // that can be found in the LICENSE file at the root of the
-// Mumble source tree or at <https://www.mumble.info/LICENSE>.
+// Nox source tree or at <https://www.nox.info/LICENSE>.
 
-#ifndef MUMBLE_CRYPTSTATE_H_
-#define MUMBLE_CRYPTSTATE_H_
+#ifndef NOX_CRYPTSTATE_H_
+#define NOX_CRYPTSTATE_H_
 
-#include <QtGlobal>
 
-#include "Timer.h"
 
-#include <chrono>
-#include <queue>
-#include <string>
 
 struct PacketStats {
 	unsigned int good   = 0;
@@ -58,3 +53,16 @@ public:
 	virtual bool isValid() const                                                                 = 0;
 	virtual void genKey()                                                                        = 0;
 	virtual bool setKey(const std::string &rkey, const std::string &eiv, const std::string &div) = 0;
+	virtual bool setRawKey(const std::string &rkey)                                              = 0;
+	virtual bool setEncryptIV(const std::string &iv)                                             = 0;
+	virtual bool setDecryptIV(const std::string &iv)                                             = 0;
+	virtual std::string getRawKey()                                                              = 0;
+	virtual std::string getEncryptIV()                                                           = 0;
+	virtual std::string getDecryptIV()                                                           = 0;
+
+	virtual bool decrypt(const unsigned char *source, unsigned char *dst, unsigned int crypted_length) = 0;
+	virtual bool encrypt(const unsigned char *source, unsigned char *dst, unsigned int plain_length)   = 0;
+};
+
+
+#endif

@@ -1,24 +1,5 @@
-#include "AudioOutput.h"
 
-#include "AudioInput.h"
-#include "AudioOutputSample.h"
-#include "AudioOutputSpeech.h"
-#include "Channel.h"
-#include "ChannelListenerManager.h"
-#include "Log.h"
-#include "PluginManager.h"
-#include "ServerHandler.h"
-#include "Timer.h"
-#include "User.h"
-#include "Utils.h"
-#include "VoiceRecorder.h"
-#include "Global.h"
 
-#include <algorithm>
-#include <cassert>
-#include <chrono>
-#include <cmath>
-#include <memory>
 
 // Remember that we cannot use static member classes that are not pointers, as the constructor
 // for AudioOutputRegistrar() might be called before they are initialized, as the constructor

@@ -1,8 +1,5 @@
-#include "AudioPreprocessor.h"
 
-#include <utility>
 
-#include <speex/speex_preprocess.h>
 
 AudioPreprocessor::AudioPreprocessor(AudioPreprocessor &&other) : m_handle(std::exchange(other.m_handle, nullptr)) {
 }
