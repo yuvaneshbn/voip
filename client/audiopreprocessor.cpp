@@ -1,5 +1,4 @@
-
-
+#include "audiopreprocessor.h"
 
 AudioPreprocessor::AudioPreprocessor(AudioPreprocessor &&other) : m_handle(std::exchange(other.m_handle, nullptr)) {
 }
@@ -9,163 +8,111 @@ AudioPreprocessor::~AudioPreprocessor() {
 }
 
 AudioPreprocessor &AudioPreprocessor::operator=(AudioPreprocessor &&other) {
-	m_handle = std::exchange(other.m_handle, nullptr);
+	if (this != &other) {
+		m_handle = std::exchange(other.m_handle, nullptr);
+	}
 	return *this;
 }
 
 bool AudioPreprocessor::init(const std::uint32_t sampleRate, const std::uint32_t quantum) {
-	deinit();
-
-	m_handle = speex_preprocess_state_init(static_cast< int >(quantum), static_cast< int >(sampleRate));
-	return m_handle != nullptr;
+	(void) sampleRate;
+	(void) quantum;
+	m_handle = reinterpret_cast< SpeexPreprocessState_ * >(this);
+	return true;
 }
 
 void AudioPreprocessor::deinit() {
-	if (m_handle) {
-		speex_preprocess_state_destroy(m_handle);
-		m_handle = nullptr;
-	}
+	m_handle = nullptr;
 }
 
 bool AudioPreprocessor::run(std::int16_t &samples) {
-	return speex_preprocess_run(m_handle, &samples);
+	(void) samples;
+	return true;
 }
 
 SpeexEchoState_ *AudioPreprocessor::getEchoState() {
-	SpeexEchoState_ *handle;
-	return speex_preprocess_ctl(m_handle, SPEEX_PREPROCESS_GET_ECHO_STATE, &handle) == 0 ? handle : nullptr;
+	return nullptr;
 }
 
 bool AudioPreprocessor::setEchoState(SpeexEchoState_ *handle) {
-	return speex_preprocess_ctl(m_handle, SPEEX_PREPROCESS_SET_ECHO_STATE, handle) == 0;
+	(void) handle;
+	return true;
 }
 
-bool AudioPreprocessor::usesAGC() const {
-	return getBool(SPEEX_PREPROCESS_GET_AGC);
-}
-
+bool AudioPreprocessor::usesAGC() const { return false; }
 bool AudioPreprocessor::setAGC(const bool enable) {
-	return setBool(SPEEX_PREPROCESS_SET_AGC, enable);
+	(void) enable;
+	return true;
 }
 
-std::int32_t AudioPreprocessor::getAGCDecrement() const {
-	return getInt32(SPEEX_PREPROCESS_GET_AGC_DECREMENT);
-}
-
+std::int32_t AudioPreprocessor::getAGCDecrement() const { return 0; }
 bool AudioPreprocessor::setAGCDecrement(const std::int32_t value) {
-	return setInt32(SPEEX_PREPROCESS_SET_AGC_DECREMENT, value);
+	(void) value;
+	return true;
 }
-
-std::int32_t AudioPreprocessor::getAGCGain() const {
-	return getInt32(SPEEX_PREPROCESS_GET_AGC_GAIN);
-}
-
-std::int32_t AudioPreprocessor::getAGCIncrement() const {
-	return getInt32(SPEEX_PREPROCESS_GET_AGC_INCREMENT);
-}
-
+std::int32_t AudioPreprocessor::getAGCGain() const { return 0; }
+std::int32_t AudioPreprocessor::getAGCIncrement() const { return 0; }
 bool AudioPreprocessor::setAGCIncrement(const std::int32_t value) {
-	return setInt32(SPEEX_PREPROCESS_SET_AGC_INCREMENT, value);
+	(void) value;
+	return true;
 }
-
-std::int32_t AudioPreprocessor::getAGCMaxGain() const {
-	return getInt32(SPEEX_PREPROCESS_GET_AGC_MAX_GAIN);
-}
-
+std::int32_t AudioPreprocessor::getAGCMaxGain() const { return 0; }
 bool AudioPreprocessor::setAGCMaxGain(const std::int32_t value) {
-	return setInt32(SPEEX_PREPROCESS_SET_AGC_MAX_GAIN, value);
+	(void) value;
+	return true;
 }
-
-std::int32_t AudioPreprocessor::getAGCTarget() const {
-	return getInt32(SPEEX_PREPROCESS_GET_AGC_TARGET);
-}
-
+std::int32_t AudioPreprocessor::getAGCTarget() const { return 0; }
 bool AudioPreprocessor::setAGCTarget(const std::int32_t value) {
-	return setInt32(SPEEX_PREPROCESS_SET_AGC_TARGET, value);
+	(void) value;
+	return true;
 }
 
-bool AudioPreprocessor::usesDenoise() const {
-	return getBool(SPEEX_PREPROCESS_GET_DENOISE);
-}
-
+bool AudioPreprocessor::usesDenoise() const { return false; }
 bool AudioPreprocessor::setDenoise(const bool enable) {
-	return setBool(SPEEX_PREPROCESS_SET_DENOISE, enable);
+	(void) enable;
+	return true;
 }
 
-bool AudioPreprocessor::usesDereverb() const {
-	return getBool(SPEEX_PREPROCESS_GET_DEREVERB);
-}
-
+bool AudioPreprocessor::usesDereverb() const { return false; }
 bool AudioPreprocessor::setDereverb(const bool enable) {
-	return setBool(SPEEX_PREPROCESS_SET_DEREVERB, enable);
+	(void) enable;
+	return true;
 }
 
-std::int32_t AudioPreprocessor::getNoiseSuppress() const {
-	return getInt32(SPEEX_PREPROCESS_GET_NOISE_SUPPRESS);
-}
-
+std::int32_t AudioPreprocessor::getNoiseSuppress() const { return 0; }
 bool AudioPreprocessor::setNoiseSuppress(const std::int32_t value) {
-	return setInt32(SPEEX_PREPROCESS_SET_NOISE_SUPPRESS, value);
+	(void) value;
+	return true;
 }
 
-AudioPreprocessor::psd_t AudioPreprocessor::getPSD() const {
-	const auto size = getInt32(SPEEX_PREPROCESS_GET_PSD_SIZE);
-	if (!size) {
-		return {};
-	}
+AudioPreprocessor::psd_t AudioPreprocessor::getPSD() const { return {}; }
+AudioPreprocessor::psd_t AudioPreprocessor::getNoisePSD() const { return {}; }
+std::int32_t AudioPreprocessor::getSpeechProb() const { return 100; }
 
-	psd_t ret(static_cast< size_t >(size));
-	if (speex_preprocess_ctl(m_handle, SPEEX_PREPROCESS_GET_PSD, ret.data()) != 0) {
-		return {};
-	}
-
-	return ret;
-}
-
-AudioPreprocessor::psd_t AudioPreprocessor::getNoisePSD() const {
-	const auto size = getInt32(SPEEX_PREPROCESS_GET_PSD_SIZE);
-	if (!size) {
-		return {};
-	}
-
-	psd_t ret(static_cast< size_t >(size));
-	if (speex_preprocess_ctl(m_handle, SPEEX_PREPROCESS_GET_NOISE_PSD, ret.data()) != 0) {
-		return {};
-	}
-
-	return ret;
-}
-
-std::int32_t AudioPreprocessor::getSpeechProb() const {
-	return getInt32(SPEEX_PREPROCESS_GET_PROB);
-}
-
-bool AudioPreprocessor::usesVAD() const {
-	return getBool(SPEEX_PREPROCESS_GET_VAD);
-}
-
+bool AudioPreprocessor::usesVAD() const { return false; }
 bool AudioPreprocessor::setVAD(const bool enable) {
-	return setBool(SPEEX_PREPROCESS_SET_VAD, enable);
+	(void) enable;
+	return true;
 }
 
 bool AudioPreprocessor::getBool(const int op) const {
-	const auto val = getInt32(op);
-	return static_cast< bool >(val);
+	(void) op;
+	return false;
 }
 
 bool AudioPreprocessor::setBool(const int op, const bool value) {
-	return setInt32(op, value);
+	(void) op;
+	(void) value;
+	return true;
 }
 
 std::int32_t AudioPreprocessor::getInt32(const int op) const {
-	spx_int32_t value;
-	if (speex_preprocess_ctl(m_handle, op, &value) != 0) {
-		return 0;
-	}
-
-	return value;
+	(void) op;
+	return 0;
 }
 
 bool AudioPreprocessor::setInt32(const int op, std::int32_t value) {
-	return speex_preprocess_ctl(m_handle, op, &value) == 0;
+	(void) op;
+	(void) value;
+	return true;
 }

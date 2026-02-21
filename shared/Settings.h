@@ -21,7 +21,7 @@
 
 #include "Channel.h"
 #include "EchoCancelOption.h"
-#include "MumbleConstants.h"
+#include "noxConstants.h"
 #include "QuitBehavior.h"
 #include "SSL.h"
 #include "SearchDialog.h"
@@ -54,7 +54,7 @@ struct Shortcut {
 };
 
 struct ChannelTarget {
-	unsigned int channelID = Mumble::ROOT_CHANNEL_ID;
+	unsigned int channelID = Nox::ROOT_CHANNEL_ID;
 
 	ChannelTarget() = default;
 	ChannelTarget(unsigned int id) : channelID(id) {}

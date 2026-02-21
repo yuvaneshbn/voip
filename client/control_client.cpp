@@ -1,5 +1,6 @@
 #include "control_client.h"
 
+#include <QHostInfo>
 #include <QTimer>
 
 ControlClient::ControlClient(QObject *parent)
@@ -7,13 +8,29 @@ ControlClient::ControlClient(QObject *parent)
 }
 
 bool ControlClient::initialize(const std::string &serverIp, quint16 port) {
-    QHostAddress parsed;
-    if (!parsed.setAddress(QString::fromStdString(serverIp))) {
-        return false;
-    }
-
-    serverAddress_ = parsed;
+    const QString target = QString::fromStdString(serverIp).trimmed();
     serverPort_ = port;
+    discoveryMode_ = false;
+
+    if (target.isEmpty() || target.compare(QStringLiteral("auto"), Qt::CaseInsensitive) == 0) {
+        serverAddress_ = QHostAddress::Broadcast;
+        discoveryMode_ = true;
+    } else {
+        QHostAddress parsed;
+        if (!parsed.setAddress(target)) {
+            const QHostInfo info = QHostInfo::fromName(target);
+            for (const QHostAddress &addr : info.addresses()) {
+                if (addr.protocol() == QAbstractSocket::IPv4Protocol) {
+                    parsed = addr;
+                    break;
+                }
+            }
+            if (parsed.isNull()) {
+                return false;
+            }
+        }
+        serverAddress_ = parsed;
+    }
 
     QObject::connect(&socket_, &QUdpSocket::readyRead,
                      this, &ControlClient::onReadyRead,
@@ -24,6 +41,10 @@ bool ControlClient::initialize(const std::string &serverIp, quint16 port) {
     }
 
     return socket_.bind(QHostAddress::AnyIPv4, 0, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
+}
+
+QString ControlClient::server_ip() const {
+    return serverAddress_.toString();
 }
 
 void ControlClient::start() {
@@ -139,7 +160,9 @@ void ControlClient::onReadyRead() {
         quint16 senderPort = 0;
         socket_.readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
 
-        if (sender != serverAddress_ || senderPort != serverPort_) {
+        const bool fromConfiguredServer = (sender == serverAddress_ && senderPort == serverPort_);
+        const bool fromDiscoveredServer = discoveryMode_ && senderPort == serverPort_;
+        if (!fromConfiguredServer && !fromDiscoveredServer) {
             continue;
         }
 
@@ -151,6 +174,10 @@ void ControlClient::onReadyRead() {
         const QString type = msg.value(QStringLiteral("type")).toString();
 
         if (type == QStringLiteral("pong")) {
+            if (discoveryMode_ && sender.protocol() == QAbstractSocket::IPv4Protocol) {
+                serverAddress_ = sender;
+                discoveryMode_ = false;
+            }
             const quint64 pingId = static_cast<quint64>(msg.value(QStringLiteral("ping_id")).toDouble(0));
             emit pongReceived(pingId);
             continue;

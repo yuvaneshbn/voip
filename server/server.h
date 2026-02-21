@@ -379,7 +379,7 @@ public:
 	void userEnterChannel(User *u, Channel *c, NoxProto::UserState &mpus);
 	bool unregisterUser(int id);
 
-	Server(unsigned int snum, const ::mumble::db::ConnectionParameter &connectionParam, QObject *parent = nullptr);
+	Server(unsigned int snum, const ::nox::db::ConnectionParameter &connectionParam, QObject *parent = nullptr);
 	~Server();
 
 	bool canNest(Channel *newParent, Channel *channel = nullptr) const;
@@ -479,5 +479,5 @@ public:
 #undef PROCESS_NOX_TCP_MESSAGE
 };
 
-#endif
+#endif // NOX_SERVER_H_
 

@@ -1,7 +1,4 @@
 
-#ifndef NOX_PACKETDATASTREAM_H_
-#define NOX_PACKETDATASTREAM_H_
-
 #include <QByteArray>
 #include <QPair>
 #include <QString>

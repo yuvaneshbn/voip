@@ -1,4 +1,5 @@
 #include "AudioReceiverBuffer.h"
+#include "server/serveruser.h"
 
 #include <algorithm>
 #include <cassert>

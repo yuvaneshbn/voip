@@ -1,8 +1,4 @@
-// Copyright The Nox Developers. All rights reserved.
-// Use of this source code is governed by a BSD-style license
-// that can be found in the LICENSE file at the root of the
-// Nox source tree or at <https://www.nox.info/LICENSE>.
-
+#include "crypto/CryptState.h"
 
 void CryptState::updateRollingStats() {
 	if (!m_rollingStatsEnabled) {

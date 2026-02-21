@@ -1,5 +1,4 @@
-#ifndef MUMBLE_TIMER_H_
-#define MUMBLE_TIMER_H_
+#pragma once
 
 #include <cassert>
 #include <chrono>
@@ -39,5 +38,3 @@ public:
 protected:
 	std::chrono::time_point< std::chrono::steady_clock > m_start;
 };
-
-#endif

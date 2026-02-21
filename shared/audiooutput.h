@@ -1,6 +1,5 @@
-
-#ifndef MUMBLE_MUMBLE_AUDIOOUTPUT_H_
-#define MUMBLE_MUMBLE_AUDIOOUTPUT_H_
+#ifndef NOX_SHARED_AUDIOOUTPUT_H_
+#define NOX_SHARED_AUDIOOUTPUT_H_
 
 #include <QtCore/QObject>
 #include <QtCore/QThread>
@@ -9,7 +8,7 @@
 
 #ifdef USE_MANUAL_PLUGIN
 #	include "ManualPlugin.h"
-#endif
+#endif // NOX_SHARED_AUDIOOUTPUT_H_
 
 #include <memory>
 

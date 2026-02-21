@@ -1,6 +1,4 @@
-
-#ifndef MUMBLE_VERSION_H_
-#define MUMBLE_VERSION_H_
+#pragma once
 
 #include <cstdint>
 #include <limits>
@@ -30,12 +28,6 @@ namespace Version {
 
 enum class CompareMode { AtLeast, LessThan };
 
-//
-// The mumble version format (v2) is a uint64:
-// major   minor   patch   reserved/unused
-// 0xFFFF  0xFFFF  0xFFFF  0xFFFF
-// (big-endian)
-//
 
 using full_t      = std::uint64_t;
 using component_t = std::uint16_t;
@@ -90,15 +82,6 @@ constexpr void getComponents(Version::component_t &major, Version::component_t &
 	patch = Version::getPatch(version);
 }
 
-//
-// Legacy versions: These versions are kept around for backward compatibility, but
-// have since been replaced by other version formats.
-//
-// Mumble legacy version format (v1) is a uint32:
-// major   minor  patch
-// 0xFFFF  0xFF   0xFF
-// (big-endian)
-//
 
 constexpr Version::full_t fromLegacyVersion(std::uint32_t version) {
 	return fromComponents(static_cast< component_t >((version & 0xFFFF0000) >> 16),
@@ -107,8 +90,7 @@ constexpr Version::full_t fromLegacyVersion(std::uint32_t version) {
 }
 
 constexpr std::uint32_t toLegacyVersion(Version::full_t version) {
-	// If any of the version components exceeds their allowed value range, they will
-	// be truncated to the highest representable value
+
 	return ((std::min(static_cast< std::uint32_t >(Version::getMajor(version)),
 					  static_cast< std::uint32_t >(std::numeric_limits< std::uint16_t >::max()))
 			 << 16)
@@ -120,5 +102,3 @@ constexpr std::uint32_t toLegacyVersion(Version::full_t version) {
 }
 
 } // namespace Version
-
-#endif

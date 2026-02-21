@@ -1,5 +1,4 @@
-#ifndef MUMBLE_VOLUMEADJUSTMENT_H_
-#define MUMBLE_VOLUMEADJUSTMENT_H_
+#pragma once
 
 #include <limits>
 
@@ -23,5 +22,3 @@ public:
 	friend bool operator!=(const VolumeAdjustment &lhs, const VolumeAdjustment &rhs);
 };
 
-
-#endif

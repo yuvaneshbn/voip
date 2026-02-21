@@ -11,6 +11,17 @@
 #include <string>
 #include <vector>
 
+#if __has_include("google/protobuf/runtime_version.h") && __has_include("Nox.pb.h")
+#include "Nox.pb.h"
+#endif
+
+// UDP protobuf structures are not required by the current codec path.
+// Keep lightweight placeholders so protocol handlers remain buildable.
+namespace NoxUDP {
+class Audio {};
+class Ping {};
+} // namespace NoxUDP
+
 /**
  * "X-macro" for all Nox Protobuf TCP messages types.
  *
@@ -53,6 +64,10 @@
 #define NOX_ALL_UDP_MESSAGES          \
 	PROCESS_NOX_UDP_MESSAGE(Audio, 0) \
 	PROCESS_NOX_UDP_MESSAGE(Ping, 1)
+
+#ifndef MUMBLE_ALL_TCP_MESSAGES
+#	define MUMBLE_ALL_TCP_MESSAGES NOX_ALL_TCP_MESSAGES
+#endif
 
 namespace Nox {
 namespace Protocol {
@@ -280,6 +295,10 @@ namespace Protocol {
 
 } // namespace Protocol
 } // namespace Nox
+
+namespace Mumble {
+namespace Protocol = Nox::Protocol;
+}
 
 /**
  * This is merely a dummy-function (never used) that is required as a scope for dummy-switch statements on our message

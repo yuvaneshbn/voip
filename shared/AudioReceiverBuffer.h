@@ -1,5 +1,15 @@
-#ifndef MUMBLE_MURMUR_AUDIORECEIVERBUFFER_H_
-#define MUMBLE_MURMUR_AUDIORECEIVERBUFFER_H_
+#pragma once
+
+#include "NoxProtocol.h"
+#include "VolumeAdjustment.h"
+
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <unordered_map>
+#include <vector>
+
+class ServerUser;
 
 
 
@@ -76,8 +86,6 @@ public:
 		// the exact same audio packet (thus: no re-encoding required between sending the packet to them).
 		range.end = std::lower_bound(begin, end, *begin, [](const AudioReceiver &lhs, const AudioReceiver &rhs) {
 			return lhs.getContext() == rhs.getContext()
-				   && Nox::Protocol::protocolVersionsAreCompatible(lhs.getReceiver().m_version,
-																   rhs.getReceiver().m_version)
 				   // The factor difference caps audible differences for high volume adjustments (where 1dB is already a
 				   // big difference). Thus, this is a cap on the absolute loudness difference.
 				   && std::abs(lhs.getVolumeAdjustment().factor - rhs.getVolumeAdjustment().factor) < maxFactorDiff
@@ -99,5 +107,3 @@ protected:
 
 	void preprocessBuffer(std::vector< AudioReceiver > &receiverList);
 };
-
-#endif // MUMBLE_MURMUR_AUDIORECEIVERBUFFER_H_

@@ -11,7 +11,7 @@
 #include "HostAddress.h"
 #include "LegacyPasswordHash.h"
 #include "Meta.h"
-#include "MumbleConstants.h"
+#include "noxConstants.h"
 #include "MumbleProtocol.h"
 #include "PBKDF2.h"
 #include "ProtoUtils.h"
@@ -25,8 +25,8 @@
 #endif
 #include "Utils.h"
 
-#include "murmur/database/DBUserData.h"
-#include "murmur/database/UserProperty.h"
+#include "nox/database/DBUserData.h"
+#include "nox/database/UserProperty.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QRegularExpression>
@@ -80,7 +80,7 @@ QSslSocket *SslServer::nextPendingSSLConnection() {
 }
 
 
-Server::Server(unsigned int snum, const ::mumble::db::ConnectionParameter &connectionParam, QObject *p)
+Server::Server(unsigned int snum, const ::nox::db::ConnectionParameter &connectionParam, QObject *p)
 	: QThread(p), m_dbWrapper(connectionParam) {
 	tracy::SetThreadName("mumble-server");
 
@@ -2663,7 +2663,7 @@ int Server::authenticate(QString &name, const QString &password, int sessionId, 
 				// Note: The provided password could be intended to be used as a server-password but given that the
 				// chosen name matches a registered user, we can't allow this user to authenticate via server password.
 				return AUTHENTICATION_FAILED;
-			} else if (userID == Mumble::SUPERUSER_ID) {
+			} else if (userID == Nox::SUPERUSER_ID) {
 				// We force SuperUser to use password authentication
 				return AUTHENTICATION_FAILED;
 			}
@@ -2719,7 +2719,7 @@ int Server::authenticate(QString &name, const QString &password, int sessionId, 
 
 
 		// If provided, store this user's certificate hash
-		const bool isSuperUser = static_cast< unsigned int >(userID) == Mumble::SUPERUSER_ID;
+		const bool isSuperUser = static_cast< unsigned int >(userID) == Nox::SUPERUSER_ID;
 		if (!isSuperUser && !certhash.isEmpty()) {
 			m_dbWrapper.storeUserProperty(iServerNum, static_cast< unsigned int >(userID),
 										  ::mumble::server::db::UserProperty::CertificateHash, certhash.toStdString());

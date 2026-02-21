@@ -1,58 +1,67 @@
+#pragma once
 
-#ifndef NOX_CONNECTION_H_
-#define NOX_CONNECTION_H_
+#include "NoxProtocol.h"
+#include "crypto/CryptState.h"
 
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QList>
+#include <QtCore/QMutex>
+#include <QtCore/QObject>
+#include <QtNetwork/QHostAddress>
+#include <QtNetwork/QSslCertificate>
+#include <QtNetwork/QSslCipher>
+#include <QtNetwork/QSslError>
+#include <QtNetwork/QSslSocket>
 
+#include <memory>
 
 #ifdef Q_OS_WIN
-#	include "shared/win.h"
-#endif
-
-
-
-#ifdef Q_OS_WIN
-#	include <ws2tcpip.h>
+#include "shared/win.h"
+#include <ws2tcpip.h>
 #endif
 
 namespace google {
 namespace protobuf {
-	class Message;
-}
+class Message;
+} // namespace protobuf
 } // namespace google
 
 class Connection : public QObject {
-private:
-	Q_OBJECT
 	Q_DISABLE_COPY(Connection)
+
 protected:
-	QSslSocket *qtsSocket;
+	QSslSocket *qtsSocket = nullptr;
 	QElapsedTimer qtLastPacket;
-	Mumble::Protocol::TCPMessageType m_type;
-	int iPacketLength;
+	Nox::Protocol::TCPMessageType m_type = static_cast< Nox::Protocol::TCPMessageType >(0);
+	int iPacketLength                    = -1;
+
 #ifdef Q_OS_WIN
 	static HANDLE hQoS;
-	DWORD dwFlow;
+	DWORD dwFlow = 0;
 #endif
-protected slots:
+
+protected:
 	void socketRead();
 	void socketError(QAbstractSocket::SocketError);
 	void socketDisconnected();
 	void socketSslErrors(const QList< QSslError > &errors);
-public slots:
+
+public:
 	void proceedAnyway();
-signals:
+
+public:
 	void encrypted();
 	void connectionClosed(QAbstractSocket::SocketError, const QString &reason);
-	void message(Mumble::Protocol::TCPMessageType type, const QByteArray &);
+	void message(Nox::Protocol::TCPMessageType type, const QByteArray &);
 	void handleSslErrors(const QList< QSslError > &);
 
 public:
 	Connection(QObject *parent, QSslSocket *qtsSocket);
-	~Connection();
-	static void messageToNetwork(const ::google::protobuf::Message &msg, Mumble::Protocol::TCPMessageType msgType,
+	~Connection() override;
+
+	static void messageToNetwork(const ::google::protobuf::Message &msg, Nox::Protocol::TCPMessageType msgType,
 								 QByteArray &cache);
-	void sendMessage(const ::google::protobuf::Message &msg, Mumble::Protocol::TCPMessageType msgType,
-					 QByteArray &cache);
+	void sendMessage(const ::google::protobuf::Message &msg, Nox::Protocol::TCPMessageType msgType, QByteArray &cache);
 	void sendMessage(const QByteArray &qbaMsg);
 	void disconnectSocket(bool force = false);
 	void forceFlush();
@@ -60,28 +69,22 @@ public:
 	void resetActivityTime();
 
 #ifdef MURMUR
-	/// qmCrypt locks access to csCrypt.
 	QMutex qmCrypt;
 #endif
 	std::unique_ptr< CryptState > csCrypt;
-	/// Returns the peer's chain of digital certificates, starting with the peer's immediate certificate
-	/// and ending with the CA's certificate.
+
 	QList< QSslCertificate > peerCertificateChain() const;
 	QSslCipher sessionCipher() const;
 	QSsl::SslProtocol sessionProtocol() const;
 	QString sessionProtocolString() const;
 	QHostAddress peerAddress() const;
 	quint16 peerPort() const;
-	/// Look up the local address of this Connection.
 	QHostAddress localAddress() const;
-	/// Look up the local port of this Connection.
 	quint16 localPort() const;
-	bool bDisconnectedEmitted;
+	bool bDisconnectedEmitted = false;
 
 	void setToS();
 #ifdef Q_OS_WIN
 	static void setQoS(HANDLE hParentQoS);
 #endif
 };
-
-#endif

@@ -1,6 +1,9 @@
 #pragma once
 
+#include "constants.h"
 
+#include <cstdint>
+#include <vector>
 
 class EchoCanceller {
 public:

@@ -1,16 +1,7 @@
-// Copyright The Nox Developers. All rights reserved.
-// Use of this source code is governed by a BSD-style license
-// that can be found in the LICENSE file at the root of the
-// Nox source tree or at <https://www.nox.info/LICENSE>.
+#include "crypto/CryptStateOCB2.h"
+#include <openssl/rand.h>
 
-/*
- * This code implements OCB-AES128.
- * The algorithm design was dedicated to the public domain.
- * https://www.cs.ucdavis.edu/~rogaway/ocb/license.htm
- * https://www.cs.ucdavis.edu/~rogaway/ocb/ocb-faq.htm
- */
-
-
+#include <cstring>
 #ifndef __LP64__
 #	ifdef Q_OS_WIN
 #		include "shared/win.h"
@@ -44,9 +35,9 @@ bool CryptStateOCB2::isValid() const {
 }
 
 void CryptStateOCB2::genKey() {
-	CryptographicRandom::fillBuffer(raw_key, AES_KEY_SIZE_BYTES);
-	CryptographicRandom::fillBuffer(encrypt_iv, AES_BLOCK_SIZE);
-	CryptographicRandom::fillBuffer(decrypt_iv, AES_BLOCK_SIZE);
+	RAND_bytes(raw_key, AES_KEY_SIZE_BYTES);
+	RAND_bytes(encrypt_iv, AES_BLOCK_SIZE);
+	RAND_bytes(decrypt_iv, AES_BLOCK_SIZE);
 	bInit = true;
 }
 

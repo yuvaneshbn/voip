@@ -14,6 +14,7 @@ public:
     bool initialize(const std::string &serverIp, quint16 port);
     void start();
     void stop();
+    QString server_ip() const;
 
     bool ping_server(int timeoutMs);
 
@@ -38,6 +39,7 @@ private:
     QUdpSocket socket_;
     QHostAddress serverAddress_;
     quint16 serverPort_ = 0;
+    bool discoveryMode_ = false;
     std::function<void(const std::vector<CtrlUserInfo> &)> userListCallback_;
     std::function<void(uint32_t, const QByteArray &)> voiceCallback_;
     quint64 nextPingId_ = 1;

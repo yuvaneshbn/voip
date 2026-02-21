@@ -1,13 +1,13 @@
-// Copyright The Nox Developers. All rights reserved.
-// Use of this source code is governed by a BSD-style license
-// that can be found in the LICENSE file at the root of the
-// Nox source tree or at <https://www.nox.info/LICENSE>.
+#pragma once
 
-#ifndef NOX_CRYPTSTATE_H_
-#define NOX_CRYPTSTATE_H_
+#include "shared/Timer.h"
 
+#include <QtCore/QtGlobal>
 
-
+#include <chrono>
+#include <queue>
+#include <ratio>
+#include <string>
 
 struct PacketStats {
 	unsigned int good   = 0;
@@ -64,5 +64,3 @@ public:
 	virtual bool encrypt(const unsigned char *source, unsigned char *dst, unsigned int plain_length)   = 0;
 };
 
-
-#endif

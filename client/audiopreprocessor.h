@@ -1,7 +1,8 @@
+#pragma once
 
-#ifndef MUMBLE_MUMBLE_AUDIOPREPROCESSOR_H_
-#define MUMBLE_MUMBLE_AUDIOPREPROCESSOR_H_
-
+#include <cstdint>
+#include <utility>
+#include <vector>
 
 struct SpeexEchoState_;
 struct SpeexPreprocessState_;
@@ -205,5 +206,3 @@ private:
 
 	SpeexPreprocessState_ *m_handle = nullptr;
 };
-
-#endif

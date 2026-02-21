@@ -152,4 +152,4 @@ public:
 	ServerUser(Server *parent, QSslSocket *socket);
 };
 
-#endif
+#endif // NOX_SERVERUSER_H_

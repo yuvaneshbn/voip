@@ -1,7 +1,5 @@
 
 
-#ifndef MUMBLE_BYTESWAP_H_
-#define MUMBLE_BYTESWAP_H_
 
 
 #if Q_BYTE_ORDER == Q_BIG_ENDIAN

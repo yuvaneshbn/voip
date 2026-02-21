@@ -2,8 +2,7 @@
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QNetworkInterface>
-
-#include <thread>
+#include <QThread>
 
 #include "MainWindow.h"
 #include "control_client.h"
@@ -11,7 +10,10 @@
 namespace {
 QString normalizeServerIp(QString serverIp) {
     serverIp = serverIp.trimmed();
-    if (serverIp.isEmpty() || serverIp.compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0) {
+    if (serverIp.isEmpty() || serverIp.compare(QStringLiteral("auto"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("auto");
+    }
+    if (serverIp.compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0) {
         return QStringLiteral("127.0.0.1");
     }
 
@@ -44,9 +46,26 @@ bool isServerAvailable(const QString& serverIp, int attempts = 10, int delayMs =
         if (control.ping_server(500)) {
             return true;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+        QThread::msleep(static_cast< unsigned long >(delayMs));
     }
     return false;
+}
+
+QString resolveServerForUi(const QString &serverIp) {
+    if (serverIp.compare(QStringLiteral("auto"), Qt::CaseInsensitive) != 0) {
+        return serverIp;
+    }
+
+    ControlClient control;
+    if (!control.initialize("auto", DEFAULT_CONTROL_PORT)) {
+        return serverIp;
+    }
+    if (!control.ping_server(500)) {
+        return serverIp;
+    }
+
+    const QString discovered = control.server_ip();
+    return discovered.isEmpty() ? serverIp : discovered;
 }
 }
 
@@ -55,7 +74,7 @@ int main(int argc, char *argv[]) {
 
     const QString requestedServerIp = (argc > 1 && argv[1] && argv[1][0] != '\0')
         ? QString::fromLocal8Bit(argv[1])
-        : QStringLiteral("127.0.0.1");
+        : QStringLiteral("auto");
     const QString serverIp = normalizeServerIp(requestedServerIp);
 
     if (!isServerAvailable(serverIp)) {
@@ -76,7 +95,7 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    MainWindow w(serverIp, clientName.trimmed());
+    MainWindow w(resolveServerForUi(serverIp), clientName.trimmed());
     w.show();
     return app.exec();
 }

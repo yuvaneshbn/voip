@@ -1,11 +1,22 @@
 #ifndef AUDIOOUTPUT_H_
 #define AUDIOOUTPUT_H_
 
+#include <QtCore/QList>
+#include <QtCore/QMap>
+#include <QtCore/QMultiHash>
+#include <QtCore/QReadWriteLock>
+#include <QtCore/QVariant>
+#include <QtCore/QThread>
+
+#include <memory>
+
+#include "NoxProtocol.h"
+#include "shared/Audio.h"
+#include "shared/Settings.h"
 
 
-#ifdef USE_MANUAL_PLUGIN
-#	include "ManualPlugin.h"
-#endif
+#include "ManualPlugin.h"
+
 
 
 #ifndef SPEAKER_FRONT_LEFT

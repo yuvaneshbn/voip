@@ -1,5 +1,6 @@
-#ifndef CLIENTUSER_H_
-#define CLIENTUSER_H_
+
+#ifndef NOX_CLIENTUSER_H_
+#define NOX_CLIENTUSER_H_
 
 #include <QObject>
 #include <QString>
@@ -15,4 +16,4 @@ public:
     QString name;
 };
 
-#endif // CLIENTUSER_H_
+#endif // NOX_CLIENTUSER_H_

@@ -1,6 +1,5 @@
 
-#ifndef MUMBLE_CONNECTION_H_
-#define MUMBLE_CONNECTION_H_
+#pragma once
 
 #include "NoxProtocol.h"
 
@@ -17,6 +16,7 @@
 #include <QtCore/QList>
 #include <QtCore/QMutex>
 #include <QtCore/QObject>
+#include <QtNetwork/QSslCipher>
 #include <QtNetwork/QSslSocket>
 #include <memory>
 
@@ -93,5 +93,3 @@ public:
 	static void setQoS(HANDLE hParentQoS);
 #endif
 };
-
-#endif

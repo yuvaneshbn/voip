@@ -1,5 +1,6 @@
-#ifndef MUMBLE_MUMBLE_ECHOCANCELLATIONOPTION_H
-#define MUMBLE_MUMBLE_ECHOCANCELLATIONOPTION_H
+
+#ifndef NOX_ECHOCANCELOPTION_H_
+#define NOX_ECHOCANCELOPTION_H_
 
 #include <QtCore/QObject>
 #include <vector>
@@ -25,4 +26,4 @@ struct EchoCancelOption {
 	static const std::vector< EchoCancelOption > &getOptions();
 };
 
-#endif // MUMBLE_ECHOCANCELLATIONOPTION_H
+#endif // NOX_ECHOCANCELOPTION_H_

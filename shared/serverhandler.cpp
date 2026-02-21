@@ -61,7 +61,6 @@
 // Init ServerHandler::nextConnectionID
 int ServerHandler::nextConnectionID = -1;
 QMutex ServerHandler::nextConnectionIDMutex;
-	NoxProto::CryptSetup mpcs;
 ServerHandlerMessageEvent::ServerHandlerMessageEvent(const QByteArray &msg, Nox::Protocol::TCPMessageType type,
 													 bool flush)
 	: QEvent(static_cast< QEvent::Type >(SERVERSEND_EVENT)) {
@@ -139,7 +138,7 @@ ServerHandler::ServerHandler() : database(new Database(QLatin1String("ServerHand
 		QList< QSslCipher > ciphers = NoxSSL::ciphersFromOpenSSLCipherString(Global::get().s.qsSslCiphers);
 		if (ciphers.isEmpty()) {
 			qFatal("Invalid 'net/sslciphers' config option. Either the cipher string is invalid or none of the ciphers "
-				   "are available:: "%s"",
+				   "are available: \"%s\"",
 				   qPrintable(Global::get().s.qsSslCiphers));
 		}
 
@@ -151,10 +150,10 @@ ServerHandler::ServerHandler() : database(new Database(QLatin1String("ServerHand
 		for (const QSslCipher &c : ciphers) {
 			pref << c.name();
 		}
-		qWarning("ServerHandler: TLS cipher preference is "%s"", qPrintable(pref.join(QLatin1String(":"))));
+		qWarning("ServerHandler: TLS cipher preference is \"%s\"", qPrintable(pref.join(QLatin1String(":"))));
 	}
 
-			NoxProto::Ping mpp;
+#ifdef Q_OS_WIN
 	hQoS = loadQoS();
 	if (hQoS)
 		Connection::setQoS(hQoS);
@@ -278,9 +277,9 @@ void ServerHandler::udpReady() {
 				case Nox::Protocol::UDPMessageType::Ping: {
 					const Nox::Protocol::PingData pingData = m_udpDecoder.getPingData();
 
-					accUDP(static_cast< double >(static_cast< std::uint64_t >(tTimestamp.elapsed().count())
-												 - pingData.timestamp)
-						   / 1000.0);
+					accUDP.add(static_cast< double >(static_cast< std::uint64_t >(tTimestamp.elapsed().count())
+													 - pingData.timestamp)
+							   / 1000.0);
 
 					break;
 				}
@@ -488,7 +487,9 @@ void ServerHandler::run() {
 
 		Global::get().mw->rtLast = NoxProto::Reject_RejectType_None;
 
-		accUDP = accTCP = accClean;
+		accUDP.reset();
+		accTCP.reset();
+		accClean.reset();
 
 		m_version   = Version::UNKNOWN;
 		qsRelease   = QString();
@@ -634,17 +635,17 @@ void ServerHandler::sendPingInternal() {
 	mpp.set_resync(connection->csCrypt->m_statsLocal.resync);
 
 
-	if (boost::accumulators::count(accUDP)) {
-		mpp.set_udp_ping_avg(static_cast< float >(boost::accumulators::mean(accUDP)));
-		mpp.set_udp_ping_var(static_cast< float >(boost::accumulators::variance(accUDP)));
+	if (accUDP.count() > 0) {
+		mpp.set_udp_ping_avg(static_cast< float >(accUDP.mean()));
+		mpp.set_udp_ping_var(static_cast< float >(accUDP.variance()));
 	}
-	mpp.set_udp_packets(static_cast< unsigned int >(boost::accumulators::count(accUDP)));
+	mpp.set_udp_packets(static_cast< unsigned int >(accUDP.count()));
 
-	if (boost::accumulators::count(accTCP)) {
-		mpp.set_tcp_ping_avg(static_cast< float >(boost::accumulators::mean(accTCP)));
-		mpp.set_tcp_ping_var(static_cast< float >(boost::accumulators::variance(accTCP)));
+	if (accTCP.count() > 0) {
+		mpp.set_tcp_ping_avg(static_cast< float >(accTCP.mean()));
+		mpp.set_tcp_ping_var(static_cast< float >(accTCP.variance()));
 	}
-	mpp.set_tcp_packets(static_cast< unsigned int >(boost::accumulators::count(accTCP)));
+	mpp.set_tcp_packets(static_cast< unsigned int >(accTCP.count()));
 
 	sendMessage(mpp);
 
@@ -680,8 +681,9 @@ void ServerHandler::message(Nox::Protocol::TCPMessageType type, const QByteArray
 			connection->csCrypt->m_statsRemote.late   = msg.late();
 			connection->csCrypt->m_statsRemote.lost   = msg.lost();
 			connection->csCrypt->m_statsRemote.resync = msg.resync();
-			accTCP(static_cast< double >(static_cast< std::uint64_t >(tTimestamp.elapsed().count()) - msg.timestamp())
-				   / 1000.0);
+			accTCP.add(static_cast< double >(static_cast< std::uint64_t >(tTimestamp.elapsed().count())
+											 - msg.timestamp())
+					   / 1000.0);
 
 			if (((connection->csCrypt->m_statsRemote.good == 0) || (connection->csCrypt->m_statsLocal.good == 0))
 				&& bUdp && (tTimestamp.elapsed() > std::chrono::seconds(20))) {

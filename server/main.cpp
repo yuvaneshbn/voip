@@ -3,7 +3,6 @@
 
 #include "constants.h"
 #include "control_server.h"
-
 int main(int argc, char *argv[]) {
     QCoreApplication app(argc, argv);
 

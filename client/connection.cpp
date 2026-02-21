@@ -1,122 +1,58 @@
+#include "connection.h"
 
+#include <QtCore/QtEndian>
 
-#ifdef Q_OS_WIN
-#	include <qos2.h>
+#if __has_include(<google/protobuf/message.h>)
+#	include <google/protobuf/message.h>
+#	define NOX_HAS_PROTOBUF_MESSAGE 1
 #else
-#	include <netinet/in.h>
-#	include <netinet/tcp.h>
-#	include <sys/socket.h>
-#	include <sys/types.h>
+#	define NOX_HAS_PROTOBUF_MESSAGE 0
 #endif
 
-#ifdef Q_OS_WIN
-HANDLE Connection::hQoS = nullptr;
-#endif
-
-Connection::Connection(QObject *p, QSslSocket *qtsSock) : QObject(p) {
-	qtsSocket = qtsSock;
-	qtsSocket->setParent(this);
-	iPacketLength        = -1;
-	bDisconnectedEmitted = false;
-	csCrypt              = std::make_unique< CryptStateOCB2 >();
-
-	static bool bDeclared = false;
-	if (!bDeclared) {
-		bDeclared = true;
-		qRegisterMetaType< QAbstractSocket::SocketError >("QAbstractSocket::SocketError");
+Connection::Connection(QObject *p, QSslSocket *qtsSock) : QObject(p), qtsSocket(qtsSock) {
+	if (qtsSocket) {
+		qtsSocket->setParent(this);
+		connect(qtsSocket, &QSslSocket::errorOccurred, this, &Connection::socketError);
+		connect(qtsSocket, &QSslSocket::encrypted, this, &Connection::encrypted);
+		connect(qtsSocket, &QSslSocket::readyRead, this, &Connection::socketRead);
+		connect(qtsSocket, &QSslSocket::disconnected, this, &Connection::socketDisconnected);
+		connect(qtsSocket, &QSslSocket::sslErrors, this, &Connection::socketSslErrors);
+		qtLastPacket.start();
 	}
-
-	int nodelay = 1;
-	setsockopt(static_cast< int >(qtsSocket->socketDescriptor()), IPPROTO_TCP, TCP_NODELAY,
-			   reinterpret_cast< char * >(&nodelay), static_cast< socklen_t >(sizeof(nodelay)));
-
-	connect(qtsSocket, SIGNAL(errorOccurred(QAbstractSocket::SocketError)), this,
-			SLOT(socketError(QAbstractSocket::SocketError)));
-	connect(qtsSocket, SIGNAL(encrypted()), this, SIGNAL(encrypted()));
-	connect(qtsSocket, SIGNAL(readyRead()), this, SLOT(socketRead()));
-	connect(qtsSocket, SIGNAL(disconnected()), this, SLOT(socketDisconnected()));
-	connect(qtsSocket, SIGNAL(sslErrors(const QList< QSslError > &)), this,
-			SLOT(socketSslErrors(const QList< QSslError > &)));
-	qtLastPacket.restart();
-#ifdef Q_OS_WIN
-	dwFlow = 0;
-#endif
 }
 
-Connection::~Connection() {
-#ifdef Q_OS_WIN
-	if (dwFlow && hQoS) {
-		if (!QOSRemoveSocketFromFlow(hQoS, 0, dwFlow, 0))
-			qWarning("Connection: Failed to remove flow from QoS");
-	}
-#endif
-}
+Connection::~Connection() = default;
 
-void Connection::setToS() {
-#if defined(Q_OS_WIN)
-	if (dwFlow || !hQoS)
-		return;
+void Connection::encrypted() {}
+void Connection::connectionClosed(QAbstractSocket::SocketError, const QString &) {}
+void Connection::message(Nox::Protocol::TCPMessageType, const QByteArray &) {}
+void Connection::handleSslErrors(const QList< QSslError > &) {}
 
-	dwFlow = 0;
-	if (!QOSAddSocketToFlow(hQoS, qtsSocket->socketDescriptor(), nullptr, QOSTrafficTypeAudioVideo,
-							QOS_NON_ADAPTIVE_FLOW, reinterpret_cast< PQOS_FLOWID >(&dwFlow)))
-		qWarning("Connection: Failed to add flow to QOS");
-#elif defined(Q_OS_UNIX)
-	int val = 0xa0;
-	if (setsockopt(static_cast< int >(qtsSocket->socketDescriptor()), IPPROTO_IP, IP_TOS, &val, sizeof(val))) {
-		val = 0x60;
-		if (setsockopt(static_cast< int >(qtsSocket->socketDescriptor()), IPPROTO_IP, IP_TOS, &val, sizeof(val)))
-			qWarning("Connection: Failed to set TOS for TCP Socket");
-	}
-#	if defined(SO_PRIORITY)
-	socklen_t optlen = sizeof(val);
-	if (getsockopt(static_cast< int >(qtsSocket->socketDescriptor()), SOL_SOCKET, SO_PRIORITY, &val, &optlen) == 0) {
-		if (val == 0) {
-			val = 6;
-			setsockopt(static_cast< int >(qtsSocket->socketDescriptor()), SOL_SOCKET, SO_PRIORITY, &val, sizeof(val));
-		}
-	}
-#	endif
-
-#endif
-}
-
-qint64 Connection::activityTime() const {
-	return qtLastPacket.elapsed();
-}
-
-void Connection::resetActivityTime() {
-	qtLastPacket.restart();
-}
-
-/**
- * This function waits until a complete package is received and then emits it as a message.
- * It gets called everytime new data is available and interprets the message prefix header
- * to figure out the type and length. It then waits until the complete message is buffered
- * and emits it as a message so it can be handled by the corresponding message handler
- * routine.
- *
- * @see QSslSocket::readyRead()
- * @see void ServerHandler::message(unsigned int msgType, const QByteArray &qbaMsg)
- * @see void Server::message(unsigned int uiType, const QByteArray &qbaMsg, ServerUser *u)
- */
 void Connection::socketRead() {
+	if (!qtsSocket) {
+		return;
+	}
+
 	while (true) {
-		qint64 iAvailable = qtsSocket->bytesAvailable();
+		qint64 available = qtsSocket->bytesAvailable();
 		if (iPacketLength == -1) {
-			if (iAvailable < 6)
+			if (available < 6) {
 				return;
+			}
 
-			unsigned char a_ucBuffer[6];
+			unsigned char buffer[6];
+			if (qtsSocket->read(reinterpret_cast< char * >(buffer), 6) != 6) {
+				return;
+			}
 
-			qtsSocket->read(reinterpret_cast< char * >(a_ucBuffer), 6);
-			m_type        = static_cast< Mumble::Protocol::TCPMessageType >(qFromBigEndian< quint16 >(&a_ucBuffer[0]));
-			iPacketLength = qFromBigEndian< int >(&a_ucBuffer[2]);
-			iAvailable -= 6;
+			m_type        = static_cast< Nox::Protocol::TCPMessageType >(qFromBigEndian< quint16 >(&buffer[0]));
+			iPacketLength = qFromBigEndian< int >(&buffer[2]);
+			available -= 6;
 		}
 
-		if ((iPacketLength == -1) || (iAvailable < iPacketLength))
+		if ((iPacketLength == -1) || (available < iPacketLength)) {
 			return;
+		}
 
 		if (iPacketLength > 0x7fffff) {
 			qWarning() << "Host tried to send huge packet";
@@ -124,125 +60,144 @@ void Connection::socketRead() {
 			return;
 		}
 
-		QByteArray qbaBuffer = qtsSocket->read(iPacketLength);
-		iPacketLength        = -1;
-		iAvailable -= iPacketLength;
+		QByteArray payload = qtsSocket->read(iPacketLength);
+		if (payload.size() != iPacketLength) {
+			return;
+		}
 
-		emit message(m_type, qbaBuffer);
+		iPacketLength = -1;
+		emit message(m_type, payload);
 	}
 }
 
 void Connection::socketError(QAbstractSocket::SocketError err) {
+	if (!qtsSocket) {
+		emit connectionClosed(err, QString());
+		return;
+	}
 	emit connectionClosed(err, qtsSocket->errorString());
-}
-
-void Connection::socketSslErrors(const QList< QSslError > &qlErr) {
-	emit handleSslErrors(qlErr);
-}
-
-void Connection::proceedAnyway() {
-	qtsSocket->ignoreSslErrors();
 }
 
 void Connection::socketDisconnected() {
 	emit connectionClosed(QAbstractSocket::UnknownSocketError, QString());
 }
 
-void Connection::messageToNetwork(const ::google::protobuf::Message &msg, Mumble::Protocol::TCPMessageType msgType,
-								  QByteArray &cache) {
-#if GOOGLE_PROTOBUF_VERSION >= 3004000
-	std::size_t len = msg.ByteSizeLong();
-#else
-	// ByteSize() has been deprecated as of protobuf v3.4
-	std::size_t len = msg.ByteSize();
-#endif
-	if (len > 0x7fffff)
-		return;
-	cache.resize(static_cast< int >(len + 6));
-	unsigned char *uc = reinterpret_cast< unsigned char * >(cache.data());
-	qToBigEndian< quint16 >(static_cast< quint16 >(msgType), &uc[0]);
-	qToBigEndian< quint32 >(static_cast< unsigned int >(len), &uc[2]);
-
-	msg.SerializeToArray(uc + 6, static_cast< int >(len));
+void Connection::socketSslErrors(const QList< QSslError > &errors) {
+	emit handleSslErrors(errors);
 }
 
-void Connection::sendMessage(const ::google::protobuf::Message &msg, Mumble::Protocol::TCPMessageType msgType,
+void Connection::proceedAnyway() {
+	if (qtsSocket) {
+		qtsSocket->ignoreSslErrors();
+	}
+}
+
+void Connection::messageToNetwork(const ::google::protobuf::Message &msg, Nox::Protocol::TCPMessageType msgType,
+								  QByteArray &cache) {
+#if NOX_HAS_PROTOBUF_MESSAGE
+#if GOOGLE_PROTOBUF_VERSION >= 3004000
+	const std::size_t len = msg.ByteSizeLong();
+#else
+	// ByteSize() has been deprecated as of protobuf v3.4
+	const std::size_t len = msg.ByteSize();
+#endif
+	if (len > 0x7fffff) {
+		return;
+	}
+
+	cache.resize(static_cast< int >(len + 6));
+	unsigned char *data = reinterpret_cast< unsigned char * >(cache.data());
+	qToBigEndian< quint16 >(static_cast< quint16 >(msgType), &data[0]);
+	qToBigEndian< quint32 >(static_cast< quint32 >(len), &data[2]);
+
+	msg.SerializeToArray(data + 6, static_cast< int >(len));
+#else
+	Q_UNUSED(msg);
+	cache.resize(6);
+	unsigned char *data = reinterpret_cast< unsigned char * >(cache.data());
+	qToBigEndian< quint16 >(static_cast< quint16 >(msgType), &data[0]);
+	qToBigEndian< quint32 >(0, &data[2]);
+#endif
+}
+
+void Connection::sendMessage(const ::google::protobuf::Message &msg, Nox::Protocol::TCPMessageType msgType,
 							 QByteArray &cache) {
 	if (cache.isEmpty()) {
 		messageToNetwork(msg, msgType, cache);
 	}
-
 	sendMessage(cache);
 }
 
 void Connection::sendMessage(const QByteArray &qbaMsg) {
-	if (!qbaMsg.isEmpty())
+	if (qtsSocket && !qbaMsg.isEmpty()) {
 		qtsSocket->write(qbaMsg);
-}
-
-void Connection::forceFlush() {
-	if (qtsSocket->state() != QAbstractSocket::ConnectedState)
-		return;
-
-	if (!qtsSocket->isEncrypted())
-		return;
-
-	qtsSocket->flush();
+	}
 }
 
 void Connection::disconnectSocket(bool force) {
-	if (qtsSocket->state() == QAbstractSocket::UnconnectedState) {
-		emit connectionClosed(QAbstractSocket::UnknownSocketError, QString());
+	if (!qtsSocket) {
 		return;
 	}
-
-	if (force)
+	if (force) {
 		qtsSocket->abort();
-	else
+	} else {
 		qtsSocket->disconnectFromHost();
+	}
 }
 
-QHostAddress Connection::peerAddress() const {
-	return qtsSocket->peerAddress();
+void Connection::forceFlush() {
+	if (qtsSocket) {
+		qtsSocket->flush();
+	}
 }
 
-quint16 Connection::peerPort() const {
-	return qtsSocket->peerPort();
+qint64 Connection::activityTime() const {
+	return qtLastPacket.isValid() ? qtLastPacket.elapsed() : 0;
 }
 
-QHostAddress Connection::localAddress() const {
-	return qtsSocket->localAddress();
-}
-
-quint16 Connection::localPort() const {
-	return qtsSocket->localPort();
+void Connection::resetActivityTime() {
+	qtLastPacket.restart();
 }
 
 QList< QSslCertificate > Connection::peerCertificateChain() const {
-	// The documentation of QSslSocket::peerCertificateChain() actually says nothing
-	// about the order of the certificates in the chain. The sentence in this functions
-	// documentation is taken from QSslConfiguration::peerCertificateChain().
-	// Through tests and by looking into Qt's source code it was validated,
-	// that these two functions do the same thing.
-	// See mumble-voip/mumble#5280 for more information.
-	return qtsSocket->peerCertificateChain();
+	return qtsSocket ? qtsSocket->peerCertificateChain() : QList< QSslCertificate >();
 }
 
 QSslCipher Connection::sessionCipher() const {
-	return qtsSocket->sessionCipher();
+	return qtsSocket ? qtsSocket->sessionCipher() : QSslCipher();
 }
 
 QSsl::SslProtocol Connection::sessionProtocol() const {
-	return qtsSocket->sessionProtocol();
+	return qtsSocket ? qtsSocket->sessionProtocol() : QSsl::UnknownProtocol;
 }
 
 QString Connection::sessionProtocolString() const {
-	return MumbleSSL::protocolToString(sessionProtocol());
+	return QString::number(static_cast< int >(sessionProtocol()));
+}
+
+QHostAddress Connection::peerAddress() const {
+	return qtsSocket ? qtsSocket->peerAddress() : QHostAddress();
+}
+
+quint16 Connection::peerPort() const {
+	return qtsSocket ? qtsSocket->peerPort() : 0;
+}
+
+QHostAddress Connection::localAddress() const {
+	return qtsSocket ? qtsSocket->localAddress() : QHostAddress();
+}
+
+quint16 Connection::localPort() const {
+	return qtsSocket ? qtsSocket->localPort() : 0;
+}
+
+void Connection::setToS() {
 }
 
 #ifdef Q_OS_WIN
+HANDLE Connection::hQoS = nullptr;
+
 void Connection::setQoS(HANDLE hParentQoS) {
 	hQoS = hParentQoS;
 }
 #endif
-

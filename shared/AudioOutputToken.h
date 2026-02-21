@@ -1,7 +1,10 @@
-#ifndef MUMBLE_MUMBLE_AUDIOOUTPUTTOKEN_H_
-#define MUMBLE_MUMBLE_AUDIOOUTPUTTOKEN_H_
 
 
+#ifndef NOX_AUDIOOUTPUTTOKEN_H_
+#define NOX_AUDIOOUTPUTTOKEN_H_
+
+#include <QtCore/QObject>
+#include <cassert>
 
 class AudioOutputBuffer;
 
@@ -29,4 +32,4 @@ private:
 	friend class AudioOutput;
 };
 
-#endif // AUDIOOUTPUTTOKEN_H_
+#endif // NOX_AUDIOOUTPUTTOKEN_H_

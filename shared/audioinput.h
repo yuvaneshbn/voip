@@ -1,6 +1,5 @@
-
-#ifndef MUMBLE_MUMBLE_AUDIOINPUT_H_
-#define MUMBLE_MUMBLE_AUDIOINPUT_H_
+#ifndef NOX_SHARED_AUDIOINPUT_H_
+#define NOX_SHARED_AUDIOINPUT_H_
 
 #include <QElapsedTimer>
 #include <QObject>
@@ -186,7 +185,7 @@ private:
 	OpusEncoder *opusState;
 #ifdef USE_RNNOISE
 	DenoiseState *denoiseState;
-#endif
+#endif // NOX_SHARED_AUDIOINPUT_H_
 	bool selectCodec();
 	void selectNoiseCancel();
 

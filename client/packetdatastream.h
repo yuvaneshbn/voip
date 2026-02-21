@@ -1,6 +1,5 @@
 
-#ifndef NOX_PACKETDATASTREAM_H_
-#define NOX_PACKETDATASTREAM_H_
+#pragma once
 
 #include <QByteArray>
 #include <QPair>
@@ -402,5 +401,3 @@ public:
 		return *this >> p.first >> p.second;
 	}
 };
-
-#endif

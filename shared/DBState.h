@@ -1,5 +1,6 @@
-#ifndef MUMBLE_MURMUR_DBSTATE_H_
-#define MUMBLE_MURMUR_DBSTATE_H_
+
+#ifndef NOX_DBSTATE_H_
+#define NOX_DBSTATE_H_
 
 /**
  * Possible states the database can be in
@@ -9,4 +10,4 @@ enum class DBState {
 	ReadOnly,
 };
 
-#endif // MUMBLE_MURMUR_DBSTATE_H_
+#endif // NOX_DBSTATE_H_

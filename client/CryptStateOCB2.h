@@ -1,13 +1,12 @@
-// Copyright The Nox Developers. All rights reserved.
-// Use of this source code is governed by a BSD-style license
-// that can be found in the LICENSE file at the root of the
-// Nox source tree or at <https://www.nox.info/LICENSE>.
+#pragma once
 
-#ifndef NOX_CRYPTSTATEOCB2_H
-#define NOX_CRYPTSTATEOCB2_H
+#include "CryptState.h"
 
+#include <QtCore/QtGlobal>
 
+#include <openssl/evp.h>
 
+#include <string>
 #define AES_BLOCK_SIZE 16
 #define AES_KEY_SIZE_BITS 128
 #define AES_KEY_SIZE_BYTES (AES_KEY_SIZE_BITS / 8)
@@ -48,5 +47,3 @@ private:
 	EVP_CIPHER_CTX *dec_ctx_ocb_dec;
 };
 
-
-#endif // NOX_CRYPTSTATEOCB2_H

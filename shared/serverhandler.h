@@ -1,19 +1,10 @@
-
-
-#ifndef NOX_NOX_SERVERHANDLER_H_
-#define NOX_NOX_SERVERHANDLER_H_
+#ifndef NOX_SHARED_SERVERHANDLER_H_
+#define NOX_SHARED_SERVERHANDLER_H_
 
 #include <QtCore/QtGlobal>
 
 #ifdef Q_OS_WIN
 #	include "win.h"
-#endif
-
-#ifndef Q_MOC_RUN
-#	include <boost/accumulators/accumulators.hpp>
-#	include <boost/accumulators/statistics/mean.hpp>
-#	include <boost/accumulators/statistics/stats.hpp>
-#	include <boost/accumulators/statistics/variance.hpp>
 #endif
 
 #include <QtCore/QEvent>
@@ -33,6 +24,7 @@
 #include "ServerAddress.h"
 #include "Timer.h"
 
+#include <cstddef>
 #include <memory>
 
 class Connection;
@@ -41,6 +33,30 @@ class PacketDataStream;
 class QUdpSocket;
 class QSslSocket;
 class VoiceRecorder;
+
+struct RunningStats {
+	std::size_t samples = 0;
+	double meanValue    = 0.0;
+	double m2           = 0.0;
+
+	void add(double value) {
+		++samples;
+		const double delta = value - meanValue;
+		meanValue += delta / static_cast< double >(samples);
+		const double delta2 = value - meanValue;
+		m2 += delta * delta2;
+	}
+
+	void reset() {
+		samples   = 0;
+		meanValue = 0.0;
+		m2        = 0.0;
+	}
+
+	std::size_t count() const { return samples; }
+	double mean() const { return meanValue; }
+	double variance() const { return (samples > 0) ? (m2 / static_cast< double >(samples)) : 0.0; }
+};
 
 class ServerHandlerMessageEvent : public QEvent {
 public:
@@ -135,10 +151,7 @@ public:
 	 */
 	bool connectionUsesPerfectForwardSecrecy = false;
 
-	boost::accumulators::accumulator_set<
-		double, boost::accumulators::stats< boost::accumulators::tag::mean, boost::accumulators::tag::variance,
-											boost::accumulators::tag::count > >
-		accTCP, accUDP, accClean;
+	RunningStats accTCP, accUDP, accClean;
 
 	ServerHandler();
 	~ServerHandler();
@@ -229,4 +242,4 @@ public slots:
 
 using ServerHandlerPtr = std::shared_ptr< ServerHandler >;
 
-#endif
+#endif // NOX_SHARED_SERVERHANDLER_H_

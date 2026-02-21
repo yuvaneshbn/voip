@@ -1,7 +1,8 @@
+#pragma once
 
-
-#ifndef MUMBLE_ACL_H_
-#define MUMBLE_ACL_H_
+#include <QtCore/QHash>
+#include <QtCore/QObject>
+#include <QtCore/QString>
 
 
 class Channel;
@@ -76,5 +77,3 @@ public:
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(ChanACL::Permissions)
-
-#endif

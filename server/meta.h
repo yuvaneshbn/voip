@@ -1,6 +1,7 @@
 
-#ifndef MUMBLE_MURMUR_META_H_
-#define MUMBLE_MURMUR_META_H_
+#ifndef NOX_META_H_
+#define NOX_META_H_
+
 
 #include "shared/DBState.h"
 #include "DBWrapper.h"
@@ -198,10 +199,10 @@ public:
 	static HANDLE hQoS;
 #endif
 
-	Meta(const ::mumble::db::ConnectionParameter &connectParam);
+	Meta(const ::nox::db::ConnectionParameter &connectParam);
 	~Meta();
 
-	static const ::mumble::db::ConnectionParameter &getConnectionParameter();
+	static const ::nox::db::ConnectionParameter &getConnectionParameter();
 
 	/// reloadSSLSettings reloads Murmur's MetaParams's
 	/// SSL settings, and updates the certificate and
@@ -211,8 +212,8 @@ public:
 
 	void initPBKDF2IterationCount();
 
-	void bootAll(const ::mumble::db::ConnectionParameter &connectionParam, bool createDefaultInstance);
-	bool boot(const ::mumble::db::ConnectionParameter &connectionParam, unsigned int);
+	void bootAll(const ::nox::db::ConnectionParameter &connectionParam, bool createDefaultInstance);
+	bool boot(const ::nox::db::ConnectionParameter &connectionParam, unsigned int);
 	bool banCheck(const QHostAddress &);
 
 	/// Called whenever we get a successful connection from a client.
@@ -231,4 +232,4 @@ signals:
 
 extern Meta *meta;
 
-#endif
+#endif // NOX_META_H_
