@@ -17,11 +17,11 @@ int main(int argc, char *argv[]) {
 
     ControlServer server;
     if (!server.start(port)) {
-        qCritical() << "Failed to start UDP control server on port" << port;
+        qCritical() << "Failed to start hybrid control/media server on port" << port;
         return 1;
     }
 
-    qInfo() << "VoIP control server listening on UDP" << port;
+    qInfo() << "VoIP server listening: TCP control + UDP media on port" << port;
     return app.exec();
 }
 

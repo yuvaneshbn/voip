@@ -1,7 +1,14 @@
 #pragma once
 
 #include <QAudioFormat>
+#include <QByteArray>
+#include <QObject>
+#include <QTimer>
 
+#include <functional>
+#include <memory>
+
+class AecProcessor;
 
 QT_BEGIN_NAMESPACE
 class QAudioSink;
@@ -22,12 +29,16 @@ public:
 
     void setMuted(bool muted);
     void setTransmitEnabled(bool enabled);
+    void setInputGain(float gain);
+    void setOutputGain(float gain);
+    void setAecEnabled(bool enabled);
 
     void setOutgoingVoiceCallback(std::function<void(const QByteArray &)> cb);
     void playIncoming(const QByteArray &pcm16le);
 
 private slots:
     void onCaptureReadyRead();
+    void flushPlaybackBuffer();
 
 private:
     QAudioFormat makeAudioFormat() const;
@@ -42,10 +53,17 @@ private:
     QIODevice *captureDevice_ = nullptr;
     QIODevice *playbackDevice_ = nullptr;
     QByteArray captureBuffer_;
+    QByteArray playbackBuffer_;
+    QByteArray lastPlaybackFrame_;
     QAudioFormat ioFormat_;
+    QTimer playbackFlushTimer_;
+    std::unique_ptr<AecProcessor> aec_;
+    bool aecEnabled_ = true;
 
     bool muted_ = false;
     bool transmitEnabled_ = false;
+    float inputGain_ = 1.0f;
+    float outputGain_ = 1.0f;
     int frameBytes_ = 0;
 };
 

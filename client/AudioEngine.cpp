@@ -1,10 +1,13 @@
 #include "AudioEngine.h"
+#include "client/audio/AecProcessor.h"
 
 #include <QAudioDevice>
 #include <QAudioSink>
 #include <QAudioSource>
 #include <QDebug>
 #include <QMediaDevices>
+
+#include <algorithm>
 
 namespace {
 constexpr int kSampleRate = 48000;
@@ -15,6 +18,9 @@ constexpr int kFrameMs = 20;
 
 AudioEngine::AudioEngine(QObject *parent)
     : QObject(parent) {
+    playbackFlushTimer_.setInterval(10);
+    QObject::connect(&playbackFlushTimer_, &QTimer::timeout,
+                     this, &AudioEngine::flushPlaybackBuffer);
 }
 
 AudioEngine::~AudioEngine() {
@@ -43,6 +49,11 @@ bool AudioEngine::start() {
         bytesPerFrame = ioFormat_.channelCount() * kBytesPerSample;
     }
     frameBytes_ = (ioFormat_.sampleRate() * bytesPerFrame * kFrameMs) / 1000;
+    aec_ = std::make_unique<AecProcessor>();
+    if (aecEnabled_) {
+        const int frameSamples = frameBytes_ / std::max(1, bytesPerFrame);
+        aec_->initialize(ioFormat_.sampleRate(), frameSamples);
+    }
 
     output_ = std::make_unique<QAudioSink>(outputDevice, ioFormat_, this);
     if (!output_) {
@@ -55,18 +66,27 @@ bool AudioEngine::start() {
         return false;
     }
 
+    output_->setVolume(outputGain_);
+    playbackBuffer_.clear();
+    playbackFlushTimer_.start();
+
     ensureCaptureState();
     return true;
 }
 
 void AudioEngine::stop() {
     stopCapture();
+    playbackFlushTimer_.stop();
     playbackDevice_ = nullptr;
+    playbackBuffer_.clear();
 
     if (output_) {
         output_->stop();
     }
     output_.reset();
+    if (aec_) {
+        aec_->reset();
+    }
 }
 
 void AudioEngine::setMuted(bool muted) {
@@ -77,6 +97,36 @@ void AudioEngine::setMuted(bool muted) {
 void AudioEngine::setTransmitEnabled(bool enabled) {
     transmitEnabled_ = enabled;
     ensureCaptureState();
+}
+
+void AudioEngine::setInputGain(float gain) {
+    inputGain_ = std::clamp(gain, 0.0f, 1.0f);
+    if (input_) {
+        input_->setVolume(inputGain_);
+    }
+}
+
+void AudioEngine::setOutputGain(float gain) {
+    outputGain_ = std::clamp(gain, 0.0f, 1.0f);
+    if (output_) {
+        output_->setVolume(outputGain_);
+    }
+}
+
+void AudioEngine::setAecEnabled(bool enabled) {
+    aecEnabled_ = enabled;
+    if (!aec_) {
+        return;
+    }
+    if (!aecEnabled_) {
+        aec_->reset();
+        return;
+    }
+    const int bytesPerFrame = std::max(1, ioFormat_.bytesPerFrame());
+    const int frameSamples = frameBytes_ / bytesPerFrame;
+    if (frameSamples > 0) {
+        aec_->initialize(ioFormat_.sampleRate(), frameSamples);
+    }
 }
 
 void AudioEngine::setOutgoingVoiceCallback(std::function<void(const QByteArray &)> cb) {
@@ -91,7 +141,21 @@ void AudioEngine::playIncoming(const QByteArray &pcm16le) {
     if (!playbackDevice_ || pcm16le.isEmpty()) {
         return;
     }
-    playbackDevice_->write(pcm16le);
+
+    playbackBuffer_.append(pcm16le);
+    if (frameBytes_ > 0 && pcm16le.size() >= frameBytes_) {
+        lastPlaybackFrame_ = pcm16le.last(frameBytes_);
+    } else {
+        lastPlaybackFrame_ = pcm16le;
+    }
+
+    // Cap queued playback to avoid runaway latency under burst/loss.
+    const int maxQueueBytes = frameBytes_ * 10;
+    if (maxQueueBytes > 0 && playbackBuffer_.size() > maxQueueBytes) {
+        playbackBuffer_.remove(0, playbackBuffer_.size() - maxQueueBytes);
+    }
+
+    flushPlaybackBuffer();
 }
 
 void AudioEngine::onCaptureReadyRead() {
@@ -103,10 +167,14 @@ void AudioEngine::onCaptureReadyRead() {
     while (captureBuffer_.size() >= frameBytes_) {
         const QByteArray frame = captureBuffer_.first(frameBytes_);
         captureBuffer_.remove(0, frameBytes_);
+        QByteArray processed = frame;
+        if (aecEnabled_ && aec_ && aec_->isReady()) {
+            processed = aec_->processFrame(frame, lastPlaybackFrame_);
+        }
 
         if (shouldTransmit() && outgoingVoiceCallback_) {
-            qDebug() << "Captured frame size:" << frame.size();
-            outgoingVoiceCallback_(frame);
+            qDebug() << "Captured frame size:" << processed.size();
+            outgoingVoiceCallback_(processed);
         }
     }
 }
@@ -160,6 +228,7 @@ void AudioEngine::startCaptureIfNeeded() {
 
     QObject::connect(captureDevice_, &QIODevice::readyRead,
                      this, &AudioEngine::onCaptureReadyRead, Qt::UniqueConnection);
+    input_->setVolume(inputGain_);
 }
 
 void AudioEngine::stopCapture() {
@@ -174,5 +243,25 @@ void AudioEngine::stopCapture() {
     captureDevice_ = nullptr;
     captureBuffer_.clear();
     input_.reset();
+}
+
+void AudioEngine::flushPlaybackBuffer() {
+    if (!playbackDevice_ || playbackBuffer_.isEmpty()) {
+        return;
+    }
+
+    while (!playbackBuffer_.isEmpty()) {
+        const qint64 writable = std::max<qint64>(output_->bytesFree(), 0);
+        if (writable <= 0) {
+            break;
+        }
+
+        const int toWrite = static_cast<int>(std::min<qint64>(writable, playbackBuffer_.size()));
+        const qint64 written = playbackDevice_->write(playbackBuffer_.constData(), toWrite);
+        if (written <= 0) {
+            break;
+        }
+        playbackBuffer_.remove(0, static_cast<int>(written));
+    }
 }
 

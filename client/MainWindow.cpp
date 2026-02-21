@@ -2,8 +2,10 @@
 #include "ui_MainWindow.h"
 #include "AudioEngine.h"
 #include "control_client.h"
+#include "client/hybrid/server_discovery_service.h"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -13,8 +15,12 @@
 #include <QSlider>
 #include <QStatusBar>
 
+#include <algorithm>
+#include <chrono>
+
 namespace {
 constexpr int kRoleClientId = Qt::UserRole + 1;
+constexpr int kRoleClientSsrc = Qt::UserRole + 2;
 constexpr int kRoleParticipantName = Qt::UserRole + 3;
 constexpr size_t kMaxPingSamples = 10;
 }
@@ -71,6 +77,9 @@ MainWindow::MainWindow(const QString& serverIp,
     connect(ui->btnBroadcastAll, &QPushButton::clicked, this, &MainWindow::startBroadcastFromSidebar);
     connect(ui->btnStageBroadcast, &QPushButton::clicked, this, &MainWindow::startBroadcastFromStage);
     connect(ui->btnEndCall, &QPushButton::clicked, this, &MainWindow::endCall);
+    connect(ui->chkSelectiveHearing, &QCheckBox::toggled, this, &MainWindow::onSelectiveHearingToggled);
+    connect(ui->btnHearSelected, &QPushButton::clicked, this, &MainWindow::applySelectiveHearingFromSelection);
+    connect(ui->comboLayerPref, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::onLayerPreferenceChanged);
 
     connect(ui->btnPushToTalk, &QPushButton::pressed, this, &MainWindow::startPushToTalk);
     connect(ui->btnPushToTalk, &QPushButton::released, this, &MainWindow::stopPushToTalk);
@@ -79,15 +88,22 @@ MainWindow::MainWindow(const QString& serverIp,
 
     connect(ui->sliderMic, &QSlider::valueChanged, this, [this](int value) {
         ui->lblMicValue->setText(QString::number(value) + "%");
+        if (audio_) {
+            audio_->setInputGain(static_cast<float>(value) / 100.0f);
+        }
     });
     connect(ui->sliderSpeaker, &QSlider::valueChanged, this, [this](int value) {
         ui->lblSpeakerValue->setText(QString::number(value) + "%");
+        if (audio_) {
+            audio_->setOutputGain(static_cast<float>(value) / 100.0f);
+        }
     });
 
     localSsrc_ = static_cast<uint32_t>(
         std::chrono::high_resolution_clock::now().time_since_epoch().count());
 
     control_ = std::make_unique<ControlClient>();
+    control_->set_client_label(clientName_);
     if (!control_->initialize(serverIp_.toStdString(), DEFAULT_CONTROL_PORT)) {
         statusBar()->showMessage("Failed to initialize control client");
     } else {
@@ -101,9 +117,9 @@ MainWindow::MainWindow(const QString& serverIp,
             }, Qt::QueuedConnection);
         });
 
-        control_->set_voice_callback([this](uint32_t, const QByteArray &pcm) {
-            QMetaObject::invokeMethod(this, [this, pcm]() {
-                if (audio_) {
+        control_->set_voice_callback([this](uint32_t fromSsrc, const QByteArray &pcm) {
+            QMetaObject::invokeMethod(this, [this, fromSsrc, pcm]() {
+                if (audio_ && acceptsVoiceFrom(fromSsrc)) {
                     audio_->playIncoming(pcm);
                 }
             }, Qt::QueuedConnection);
@@ -112,11 +128,14 @@ MainWindow::MainWindow(const QString& serverIp,
         control_->start();
         control_->join(localSsrc_, clientName_.toStdString());
         control_->talk(localSsrc_, {});
+        control_->set_receive_policy(localSsrc_, {}, 4, false, preferredLayer_);
         control_->request_user_list();
         serverConnected_ = true;
     }
 
     audio_ = std::make_unique<AudioEngine>(this);
+    audio_->setInputGain(static_cast<float>(ui->sliderMic->value()) / 100.0f);
+    audio_->setOutputGain(static_cast<float>(ui->sliderSpeaker->value()) / 100.0f);
     audio_->setOutgoingVoiceCallback([this](const QByteArray &pcm) {
         if (control_ && localSsrc_ != 0) {
             control_->send_voice(localSsrc_, pcm);
@@ -125,6 +144,22 @@ MainWindow::MainWindow(const QString& serverIp,
     if (!audio_->start()) {
         statusBar()->showMessage("Audio device init failed (check mic/speaker permissions/devices)", 5000);
     }
+
+    discovery_ = std::make_unique<ServerDiscoveryService>(this);
+    discovery_->start(DEFAULT_CONTROL_PORT);
+    QObject::connect(discovery_.get(), &ServerDiscoveryService::discoveredListChanged, this,
+                     [this](const QVector<ServerDiscoveryService::DiscoveredServer> &servers) {
+                         discoveredServerCount_ = servers.size();
+                         updateHeader();
+                         if (!servers.isEmpty()) {
+                             statusBar()->showMessage(
+                                 QString("Auto-discovered %1 server(s), latest: %2:%3")
+                                     .arg(servers.size())
+                                     .arg(servers.last().address.toString())
+                                     .arg(servers.last().port),
+                                 2500);
+                         }
+                     });
 
     statusTimer_.setInterval(2000);
     listTimer_.setInterval(1500);
@@ -141,6 +176,7 @@ MainWindow::MainWindow(const QString& serverIp,
     refreshClientList();
     updateStats();
     updateGroupButtonState();
+    updateSelectiveHearingState();
     updateHeader();
     updateCallStage();
     updateAudioControls();
@@ -259,8 +295,10 @@ void MainWindow::refreshClientList() {
 
     for (const Client &client : visible) {
 
-        auto *item = new QListWidgetItem(QString("%1  (%2)").arg(client.name, statusText(client.status)));
+        auto *item = new QListWidgetItem(
+            QString("%1  [ID: %2]  (%3)").arg(client.name, client.id, statusText(client.status)));
         item->setData(kRoleClientId, client.id);
+        item->setData(kRoleClientSsrc, static_cast<qulonglong>(client.ssrc));
 
         Qt::ItemFlags flags = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
         if (client.status == ClientStatus::Online && !client.isSelf) {
@@ -339,6 +377,7 @@ void MainWindow::onClientItemChanged(QListWidgetItem *item) {
     }
 
     updateGroupButtonState();
+    updateSelectiveHearingState();
 }
 
 void MainWindow::onClientDoubleClicked(QListWidgetItem *item) {
@@ -406,6 +445,7 @@ void MainWindow::applyOccupiedTargets(const QVector<Client>& selectedOnline) {
     refreshClientList();
     updateStats();
     updateGroupButtonState();
+    updateSelectiveHearingState();
     updateCallStage();
     updateAudioControls();
 }
@@ -465,6 +505,7 @@ void MainWindow::startBroadcastFromStage() {
     refreshClientList();
     updateStats();
     updateGroupButtonState();
+    updateSelectiveHearingState();
     updateCallStage();
     updateAudioControls();
 
@@ -487,6 +528,8 @@ void MainWindow::endCall() {
 
     refreshClientList();
     updateStats();
+    updateGroupButtonState();
+    updateSelectiveHearingState();
     updateCallStage();
     updateAudioControls();
     statusBar()->showMessage("Communication route cleared", 3000);
@@ -530,6 +573,70 @@ void MainWindow::onMuteToggled(bool checked) {
     updateAudioControls();
 }
 
+void MainWindow::onSelectiveHearingToggled(bool checked) {
+    selectiveHearingEnabled_ = checked;
+    if (!selectiveHearingEnabled_) {
+        hearingTargets_.clear();
+        if (control_) {
+            control_->set_receive_policy(localSsrc_, {}, 4, false, preferredLayer_);
+        }
+    } else {
+        applySelectiveHearingFromSelection();
+    }
+    updateSelectiveHearingState();
+}
+
+void MainWindow::applySelectiveHearingFromSelection() {
+    hearingTargets_.clear();
+    for (const QString &id : selectedClientIds_) {
+        const Client *client = findClientById(id);
+        if (client && client->online && !client->isSelf) {
+            hearingTargets_.insert(client->ssrc);
+        }
+    }
+
+    if (selectiveHearingEnabled_) {
+        if (control_) {
+            std::vector<uint32_t> subs;
+            subs.reserve(hearingTargets_.size());
+            for (uint32_t ssrc : hearingTargets_) {
+                subs.push_back(ssrc);
+            }
+            control_->set_receive_policy(localSsrc_, subs, 4, true, preferredLayer_);
+        }
+        if (hearingTargets_.isEmpty()) {
+            statusBar()->showMessage("Selective hearing enabled: no users selected", 2500);
+        } else {
+            statusBar()->showMessage(
+                QString("Selective hearing: %1 user(s)").arg(hearingTargets_.size()), 2500);
+        }
+    }
+    updateSelectiveHearingState();
+}
+
+void MainWindow::onLayerPreferenceChanged(int index) {
+    if (index <= 0) {
+        preferredLayer_ = QStringLiteral("auto");
+    } else if (index == 1) {
+        preferredLayer_ = QStringLiteral("high");
+    } else {
+        preferredLayer_ = QStringLiteral("low");
+    }
+
+    if (!control_) {
+        return;
+    }
+
+    std::vector<uint32_t> subs;
+    if (selectiveHearingEnabled_) {
+        subs.reserve(hearingTargets_.size());
+        for (uint32_t ssrc : hearingTargets_) {
+            subs.push_back(ssrc);
+        }
+    }
+    control_->set_receive_policy(localSsrc_, subs, 4, selectiveHearingEnabled_, preferredLayer_);
+}
+
 void MainWindow::pollServerStatus() {
     if (!control_) {
         ++pingFailureStreak_;
@@ -547,6 +654,9 @@ void MainWindow::pollServerStatus() {
 
     const int pingMs = static_cast<int>(
         std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+    if (ok) {
+        control_->update_rtt_estimate(pingMs);
+    }
     updateNetworkQualityFromPing(ok, pingMs);
     updateHeader();
 }
@@ -573,7 +683,11 @@ void MainWindow::tickVisualizer() {
 }
 
 void MainWindow::updateHeader() {
-    ui->lblServerState->setText(serverConnected_ ? "Connected" : "Disconnected");
+    if (serverConnected_) {
+        ui->lblServerState->setText(QString("Connected (%1 discovered)").arg(discoveredServerCount_));
+    } else {
+        ui->lblServerState->setText(QString("Disconnected (%1 discovered)").arg(discoveredServerCount_));
+    }
     ui->lblLatencyTitle->setText("Network");
     const QString quality = networkQualityText();
     ui->lblLatencyValue->setText(quality);
@@ -703,5 +817,25 @@ void MainWindow::updateAudioControls() {
     } else {
         ui->lblMicActivity->setText("Mic Idle");
     }
+}
+
+void MainWindow::updateSelectiveHearingState() {
+    ui->btnHearSelected->setEnabled(selectiveHearingEnabled_);
+    if (!selectiveHearingEnabled_) {
+        ui->btnHearSelected->setText("Hear Selected Clients");
+        return;
+    }
+
+    const int n = hearingTargets_.size();
+    ui->btnHearSelected->setText(n > 0
+                                     ? QString("Hearing Selected (%1)").arg(n)
+                                     : QStringLiteral("Hearing None (Pick Users)"));
+}
+
+bool MainWindow::acceptsVoiceFrom(uint32_t ssrc) const {
+    if (!selectiveHearingEnabled_) {
+        return true;
+    }
+    return hearingTargets_.contains(ssrc);
 }
 

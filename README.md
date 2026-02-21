@@ -8,6 +8,7 @@ The app allows clients on the same network to:
 - discover/connect to a server
 - join and leave sessions
 - select talk targets (one or many users)
+- enable selective hearing (play only selected speakers)
 - exchange voice payloads over UDP
 - view online users and connection quality state in UI
 
@@ -46,11 +47,17 @@ The project defines two binaries:
 - `voip-server`
 - `voip-client`
 
-Build manifests are configured for full source inclusion by default:
-- qmake: `voip-client.pro` enables `include_all_client_sources`, `voip-server.pro` enables `include_all_server_sources`
+Build manifests are configured for full-tree compilation by default:
+- qmake: `CONFIG += include_all_client_sources` and `CONFIG += include_all_server_sources`
 - CMake: `NOX_INCLUDE_LEGACY_CLIENT_SOURCES=ON`, `NOX_INCLUDE_LEGACY_SERVER_SOURCES=ON`
 
-This means discovered `client/*.cpp`, `server/*.cpp`, and `shared/*.cpp` files are included by default.
+Runtime-only fallback (if needed for quick smoke builds):
+- qmake: remove `include_all_client_sources` / `include_all_server_sources` from `CONFIG`
+- CMake: configure with `-DNOX_MINIMAL_RUNTIME_ONLY=ON`
+
+Automatic safety fallback:
+- CMake can auto-disable full-tree compilation when legacy headers are missing (`NOX_AUTO_DISABLE_FULLTREE_IF_INCOMPLETE=ON`).
+- qmake project files also auto-remove `include_all_*_sources` if required legacy headers are absent.
 
 ## 4. Repository Structure
 
@@ -111,6 +118,36 @@ Nox/
 
 If CMake cannot find Qt automatically, set `Qt6_DIR` (example in `CMakeLists.txt` comments).
 
+### Local Self-Contained Dependencies (Recommended if Qt modules are missing)
+
+Use `local-deps/` to keep all SDK/runtime dependencies inside the repo workspace:
+
+```text
+local-deps/
+  qt6/
+    lib/cmake/Qt6/Qt6Config.cmake
+  opus/
+    opus.lib (or lib/opus.lib)
+    opus.dll (or bin/opus.dll)
+  openssl/
+    include/openssl/safestack.h
+  protobuf/
+    include/google/protobuf/message.h
+```
+
+CMake auto-detects this via `NOX_LOCAL_DEPS_DIR` (default: `./local-deps`).
+If auto-detection fails, pass explicit paths:
+
+```bash
+cmake -S . -B build-mingw -DNOX_LOCAL_DEPS_DIR=$PWD/local-deps
+cmake -S . -B build-mingw -DQt6_DIR=$PWD/local-deps/qt6/lib/cmake/Qt6
+```
+
+Qt Creator / qmake include hygiene:
+- Shared include paths are centralized in `voip-shared.pri` (`INCLUDEPATH` + `DEPENDPATH`).
+- Open the project from repo root so `shared/` paths resolve.
+- Use a Qt kit with `Core`, `Gui`, `Widgets`, `Network`, `Multimedia`.
+
 ## 7. Build Instructions
 
 ### Configure
@@ -127,6 +164,37 @@ cmake --build build-mingw -- -j4
 ```bash
 cmake --build build-mingw --target clean
 cmake --build build-mingw -- -j4
+```
+
+### Optional: PortAudio + Opus Probe Target
+
+An additional executable `opus-portaudio-probe` is available for validating:
+- mic capture -> Opus encode -> immediate decode -> speaker playback (`loopback` mode)
+- direct Opus-over-UDP exchange between two app instances (`relay` mode)
+
+Dependency layout expected:
+
+```text
+local-deps/
+  portaudio/
+    include/portaudio.h
+    portaudio.lib (or lib/portaudio.lib)
+    portaudio.dll (or bin/portaudio.dll)
+```
+
+If PortAudio is missing, CMake skips this target automatically.
+
+Run examples:
+
+```powershell
+# local pipeline validation
+.\build-mingw\opus-portaudio-probe.exe loopback --bitrate 32000
+
+# machine A
+.\build-mingw\opus-portaudio-probe.exe relay --listen 50000 --peer 192.168.1.20:50001
+
+# machine B
+.\build-mingw\opus-portaudio-probe.exe relay --listen 50001 --peer 192.168.1.10:50000
 ```
 
 ## 8. Run Instructions (Windows)
@@ -147,6 +215,30 @@ You can pass a LAN IP instead of `127.0.0.1` when running across machines.
 
 Control packets are encoded/decoded through `shared/protocol/control_protocol.h`.
 
+Voice packets use compact binary framing (`ssrc`, `sequence`, `timestamp`, `flags`, payload) over UDP.
+Current default uses Opus payloads (with PCM fallback for compatibility), and client applies:
+- per-speaker jitter reorder buffer
+- basic PLC (packet loss concealment) when sequence gaps persist
+- timestamp-driven playout scheduling with a small jitter headroom
+
+The control path also includes receiver-to-sender voice feedback (`loss_pct`, `jitter_ms`, `rtt_ms`) via server forwarding.
+Sender applies adaptive Opus bitrate/loss tuning using smoothed feedback.
+Receiver also reports `plc_pct` and `fec_pct` so sender can tune bitrate using effective concealment quality, not just packet loss.
+
+Forwarding model is now SFU-style:
+- each sender uplinks one stream to server
+- server decides per receiver which streams are forwarded
+- decisions combine sender `talk` targets, receiver `subscribe` policy, and active-speaker ranking (`max_streams`)
+
+Simulcast-ready audio layers:
+- sender publishes two Opus layers per frame: `low` and `high`
+- receiver policy can request `preferred_layer`: `auto`, `low`, or `high`
+- in `auto`, server chooses layer per receiver based on recent link feedback
+
+Discovery and fallback:
+- server broadcasts periodic `server_announce` presence on LAN
+- client first attempts auto-discovery
+- if no server is found, client prompts for manual server IP
 Typical flow:
 1. Client `ping` -> server `pong`
 2. Client `join`

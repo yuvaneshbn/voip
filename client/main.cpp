@@ -67,6 +67,21 @@ QString resolveServerForUi(const QString &serverIp) {
     const QString discovered = control.server_ip();
     return discovered.isEmpty() ? serverIp : discovered;
 }
+
+QString askManualServerIp() {
+    bool ok = false;
+    const QString entered = QInputDialog::getText(
+        nullptr,
+        QStringLiteral("Server Not Found"),
+        QStringLiteral("Auto-discovery failed. Enter server IP manually:"),
+        QLineEdit::Normal,
+        QStringLiteral("127.0.0.1"),
+        &ok);
+    if (!ok) {
+        return QString();
+    }
+    return normalizeServerIp(entered);
+}
 }
 
 int main(int argc, char *argv[]) {
@@ -77,11 +92,22 @@ int main(int argc, char *argv[]) {
         : QStringLiteral("auto");
     const QString serverIp = normalizeServerIp(requestedServerIp);
 
-    if (!isServerAvailable(serverIp)) {
-        QMessageBox::critical(nullptr,
-                              QStringLiteral("Server Unavailable"),
-                              QStringLiteral("Unable to find server in the network"));
-        return 1;
+    QString chosenServer = serverIp;
+    if (!isServerAvailable(chosenServer)) {
+        QMessageBox::warning(nullptr,
+                             QStringLiteral("Discovery Failed"),
+                             QStringLiteral("Auto-discovery did not find a server."));
+        const QString manual = askManualServerIp();
+        if (manual.isEmpty()) {
+            return 1;
+        }
+        if (!isServerAvailable(manual)) {
+            QMessageBox::critical(nullptr,
+                                  QStringLiteral("Server Unavailable"),
+                                  QStringLiteral("Unable to reach server at the provided IP."));
+            return 1;
+        }
+        chosenServer = manual;
     }
 
     bool ok = false;
@@ -95,7 +121,7 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    MainWindow w(resolveServerForUi(serverIp), clientName.trimmed());
+    MainWindow w(resolveServerForUi(chosenServer), clientName.trimmed());
     w.show();
     return app.exec();
 }

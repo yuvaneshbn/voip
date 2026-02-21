@@ -1,8 +1,19 @@
-# Set the Qt installation path if CMake fails to find Qt automatically
-# set(Qt6_DIR "C:/Qt/6.10.2/msvc2019_64/lib/cmake/Qt6")
 cmake_minimum_required(VERSION 3.21)
 
-project(NoxVoip LANGUAGES CXX)
+if(WIN32)
+    set(_NOX_QT_MINGW_GCC_CANDIDATES
+        "C:/Qt/Tools/mingw1310_64/bin/gcc.exe"
+        "C:/Qt/Tools/mingw1120_64/bin/gcc.exe"
+    )
+    foreach(_nox_gcc IN LISTS _NOX_QT_MINGW_GCC_CANDIDATES)
+        if(EXISTS "${_nox_gcc}")
+            set(CMAKE_C_COMPILER "${_nox_gcc}" CACHE FILEPATH "C compiler" FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
+
+project(NoxVoip LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,166 +23,344 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Multimedia)
-set(NOX_OPENSSL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/openssl")
-if(WIN32 AND NOT DEFINED OPENSSL_ROOT_DIR)
-    foreach(_nox_openssl_root "C:/msys64/mingw64" "C:/msys64/ucrt64")
-        if(EXISTS "${_nox_openssl_root}/include/openssl/safestack.h")
-            set(OPENSSL_ROOT_DIR "${_nox_openssl_root}" CACHE PATH "OpenSSL root directory")
-            break()
-        endif()
-    endforeach()
-endif()
-find_package(OpenSSL REQUIRED)
-if(WIN32 AND NOT DEFINED Protobuf_ROOT)
-    foreach(_nox_protobuf_root "C:/msys64/mingw64" "C:/msys64/ucrt64")
-        if(EXISTS "${_nox_protobuf_root}/include/google/protobuf/message.h")
-            set(Protobuf_ROOT "${_nox_protobuf_root}" CACHE PATH "Protobuf root directory")
-            break()
-        endif()
-    endforeach()
-endif()
-find_package(Protobuf REQUIRED)
-find_program(PERL_EXECUTABLE perl)
+include(CheckIncludeFileCXX)
 
-option(NOX_INCLUDE_LEGACY_CLIENT_SOURCES "Compile all client/shared tree sources into voip-client" OFF)
-option(NOX_INCLUDE_LEGACY_SERVER_SOURCES "Compile all server/shared tree sources into voip-server" OFF)
+set(NOX_LOCAL_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/local-deps" CACHE PATH "Local dependency root")
+if(EXISTS "${NOX_LOCAL_DEPS_DIR}")
+    list(APPEND CMAKE_PREFIX_PATH "${NOX_LOCAL_DEPS_DIR}")
+    if(NOT DEFINED Qt6_DIR AND EXISTS "${NOX_LOCAL_DEPS_DIR}/qt6/lib/cmake/Qt6/Qt6Config.cmake")
+        set(Qt6_DIR "${NOX_LOCAL_DEPS_DIR}/qt6/lib/cmake/Qt6" CACHE PATH "Qt6 CMake package path")
+    endif()
+endif()
+
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Multimedia)
 
 set(PROJECT_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/client
     ${CMAKE_CURRENT_SOURCE_DIR}/server
-    ${CMAKE_CURRENT_SOURCE_DIR}/shared
     ${CMAKE_CURRENT_SOURCE_DIR}/shared/protocol
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opus
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/nlohmann-json/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/speexdsp/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/speexdsp
+    ${NOX_LOCAL_DEPS_DIR}/opus/include
 )
 
-# Runtime/default build scope.
-set(NOX_CLIENT_RUNTIME_SOURCES
+set(NOX_CLIENT_SOURCES
     client/main.cpp
     client/AudioEngine.cpp
+    client/audio/AecProcessor.cpp
     client/MainWindow.cpp
+    client/OpusCodec.cpp
     client/control_client.cpp
+    client/hybrid/server_discovery_service.cpp
+    shared/protocol/control_wire.cpp
     client/MainWindow.ui
-)
-set(NOX_CLIENT_RUNTIME_HEADERS
-    client/AudioEngine.h
-    client/MainWindow.h
-    client/control_client.h
-    client/MainWindow.ui
-    client/audiooutput.h
-    client/audiopreprocessor.h
-    client/connection.h
-    client/CryptState.h
-    client/CryptStateOCB2.h
-    client/crypto/CryptState.h
-    client/crypto/CryptStateOCB2.h
-    client/echocanceller.h
-    client/packetdatastream.h
-    shared/ACL.h
-    shared/Audio.h
-    shared/audioinput.h
-    shared/audiooutput.h
-    shared/AudioOutputToken.h
-    shared/AudioReceiverBuffer.h
-    shared/ByteSwap.h
-    shared/ClientUser.h
-    shared/connection.h
-    shared/cryptstate.h
-    shared/DBState.h
-    shared/EchoCancelOption.h
-    shared/Nox.pb.h
-    shared/NoxProtocol.h
-    shared/packetdatastream.h
-    shared/protocol.h
-    shared/serverhandler.h
-    shared/Settings.h
-    shared/Timer.h
-    shared/Version.h
-    shared/VolumeAdjustment.h
-    shared/win.h
 )
 
-set(NOX_SERVER_RUNTIME_SOURCES
+set(NOX_SERVER_SOURCES
     server/main.cpp
     server/control_server.cpp
-)
-set(NOX_SERVER_RUNTIME_HEADERS
-    server/control_server.h
-)
-
-set(NOX_SHARED_RUNTIME_HEADERS
-    constants.h
-    shared/protocol/control_protocol.h
+    server/hybrid/client_registry.cpp
+    shared/protocol/control_wire.cpp
 )
 
-# Auto-discovered inventories to avoid stale manifests.
-file(GLOB NOX_CLIENT_ALL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/client/*.cpp)
-file(GLOB NOX_CLIENT_ALL_HEADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/client/*.h ${CMAKE_CURRENT_SOURCE_DIR}/client/crypto/*.h)
-file(GLOB NOX_SERVER_ALL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/server/*.cpp)
-file(GLOB NOX_SERVER_ALL_HEADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/server/*.h)
-file(GLOB NOX_SHARED_ALL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shared/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shared/*.cc)
-file(GLOB NOX_SHARED_ALL_HEADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shared/*.h ${CMAKE_CURRENT_SOURCE_DIR}/shared/protocol/*.h)
-file(GLOB NOX_THIRDPARTY_HEADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opus/*.h ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/speexdsp/include/speex/*.h)
-
-set(NOX_CLIENT_BUILD_SOURCES ${NOX_CLIENT_RUNTIME_SOURCES})
-set(NOX_CLIENT_BUILD_HEADERS ${NOX_CLIENT_RUNTIME_HEADERS} ${NOX_SHARED_RUNTIME_HEADERS})
-if(NOX_INCLUDE_LEGACY_CLIENT_SOURCES)
-    list(APPEND NOX_CLIENT_BUILD_SOURCES ${NOX_CLIENT_ALL_SOURCES} ${NOX_SHARED_ALL_SOURCES})
-    list(APPEND NOX_CLIENT_BUILD_HEADERS ${NOX_CLIENT_ALL_HEADERS} ${NOX_SHARED_ALL_HEADERS} ${NOX_THIRDPARTY_HEADERS})
-endif()
-list(REMOVE_DUPLICATES NOX_CLIENT_BUILD_SOURCES)
-list(REMOVE_DUPLICATES NOX_CLIENT_BUILD_HEADERS)
-set_source_files_properties(
-    client/connection.cpp
-    client/audiooutput.cpp
-    PROPERTIES SKIP_AUTOMOC ON
-)
-
-set(NOX_SERVER_BUILD_SOURCES ${NOX_SERVER_RUNTIME_SOURCES})
-set(NOX_SERVER_BUILD_HEADERS ${NOX_SERVER_RUNTIME_HEADERS} ${NOX_SHARED_RUNTIME_HEADERS})
-if(NOX_INCLUDE_LEGACY_SERVER_SOURCES)
-    list(APPEND NOX_SERVER_BUILD_SOURCES ${NOX_SERVER_ALL_SOURCES} ${NOX_SHARED_ALL_SOURCES})
-    list(APPEND NOX_SERVER_BUILD_HEADERS ${NOX_SERVER_ALL_HEADERS} ${NOX_SHARED_ALL_HEADERS} ${NOX_THIRDPARTY_HEADERS})
-endif()
-list(REMOVE_DUPLICATES NOX_SERVER_BUILD_SOURCES)
-list(REMOVE_DUPLICATES NOX_SERVER_BUILD_HEADERS)
-
-add_executable(voip-server ${NOX_SERVER_BUILD_SOURCES})
-
-target_include_directories(voip-server PRIVATE ${PROJECT_INCLUDE_DIRS})
-target_include_directories(voip-server PRIVATE ${Protobuf_INCLUDE_DIRS})
-target_link_libraries(voip-server PRIVATE Qt6::Core Qt6::Network)
-target_link_libraries(voip-server PRIVATE OpenSSL::Crypto OpenSSL::SSL)
-if(TARGET protobuf::libprotobuf)
-    target_link_libraries(voip-server PRIVATE protobuf::libprotobuf)
-else()
-    target_link_libraries(voip-server PRIVATE ${Protobuf_LIBRARIES})
-endif()
-
-add_executable(voip-client WIN32 ${NOX_CLIENT_BUILD_SOURCES})
-
+add_executable(voip-client WIN32 ${NOX_CLIENT_SOURCES})
 target_include_directories(voip-client PRIVATE ${PROJECT_INCLUDE_DIRS})
-target_include_directories(voip-client PRIVATE ${Protobuf_INCLUDE_DIRS})
 target_link_libraries(voip-client PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Multimedia)
-target_link_libraries(voip-client PRIVATE OpenSSL::Crypto OpenSSL::SSL)
-if(TARGET protobuf::libprotobuf)
-    target_link_libraries(voip-client PRIVATE protobuf::libprotobuf)
-else()
-    target_link_libraries(voip-client PRIVATE ${Protobuf_LIBRARIES})
+
+option(NOX_ENABLE_SPEEXDSP_AEC "Enable SpeexDSP-based AEC in client capture path" ON)
+if(NOX_ENABLE_SPEEXDSP_AEC)
+    set(NOX_SPEEXDSP_SRC_ROOT_CANDIDATES
+        "${NOX_LOCAL_DEPS_DIR}/speexdsp/source"
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/speexdsp"
+    )
+    set(NOX_SPEEXDSP_INC_CANDIDATES
+        "${NOX_LOCAL_DEPS_DIR}/speexdsp/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/speexdsp/include"
+    )
+    set(NOX_SPEEXDSP_LIB_CANDIDATES
+        "${NOX_LOCAL_DEPS_DIR}/speexdsp/libspeexdsp.lib"
+        "${NOX_LOCAL_DEPS_DIR}/speexdsp/lib/libspeexdsp.lib"
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/speexdsp/libspeexdsp.lib"
+    )
+
+    set(NOX_SPEEXDSP_INC "")
+    foreach(_inc IN LISTS NOX_SPEEXDSP_INC_CANDIDATES)
+        if(EXISTS "${_inc}/speex/speex_echo.h")
+            set(NOX_SPEEXDSP_INC "${_inc}")
+            break()
+        endif()
+    endforeach()
+
+    set(NOX_SPEEXDSP_LIB "")
+    foreach(_lib IN LISTS NOX_SPEEXDSP_LIB_CANDIDATES)
+        if(EXISTS "${_lib}")
+            set(NOX_SPEEXDSP_LIB "${_lib}")
+            break()
+        endif()
+    endforeach()
+
+    set(NOX_SPEEXDSP_SRC_ROOT "")
+    foreach(_root IN LISTS NOX_SPEEXDSP_SRC_ROOT_CANDIDATES)
+        if(EXISTS "${_root}/libspeexdsp/os_support.h" AND EXISTS "${_root}/include/speex/speex_echo.h")
+            set(NOX_SPEEXDSP_SRC_ROOT "${_root}")
+            break()
+        endif()
+    endforeach()
+
+    if(NOX_SPEEXDSP_SRC_ROOT)
+        add_library(nox-speexdsp STATIC
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp/buffer.c
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp/fftwrap.c
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp/filterbank.c
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp/kiss_fft.c
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp/kiss_fftr.c
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp/mdf.c
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp/preprocess.c
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp/scal.c
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp/smallft.c
+        )
+        set_target_properties(nox-speexdsp PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+        target_include_directories(nox-speexdsp PUBLIC
+            ${NOX_SPEEXDSP_SRC_ROOT}/include
+            ${NOX_SPEEXDSP_SRC_ROOT}/libspeexdsp
+        )
+        target_compile_definitions(nox-speexdsp PRIVATE FLOATING_POINT USE_SMALLFT EXPORT=)
+        target_compile_definitions(voip-client PRIVATE NOX_HAS_SPEEXDSP_AEC=1)
+        target_include_directories(voip-client PRIVATE ${NOX_SPEEXDSP_SRC_ROOT}/include)
+        target_link_libraries(voip-client PRIVATE nox-speexdsp)
+    elseif(NOX_SPEEXDSP_INC AND NOX_SPEEXDSP_LIB)
+        target_compile_definitions(voip-client PRIVATE NOX_HAS_SPEEXDSP_AEC=1)
+        target_include_directories(voip-client PRIVATE ${NOX_SPEEXDSP_INC})
+        target_link_libraries(voip-client PRIVATE "${NOX_SPEEXDSP_LIB}")
+    else()
+        message(STATUS "SpeexDSP AEC not enabled: install libspeexdsp under local-deps/speexdsp to activate.")
+    endif()
 endif()
 
-if(PERL_EXECUTABLE AND EXISTS "${NOX_OPENSSL_SOURCE_DIR}")
-    add_custom_target(nox_openssl_configure
-        COMMAND ${PERL_EXECUTABLE} Configure mingw64
-        WORKING_DIRECTORY ${NOX_OPENSSL_SOURCE_DIR}
-        COMMENT "Configuring vendored OpenSSL tree (thirdparty/openssl) using Perl"
+set(NOX_OPUS_LIB_CANDIDATES
+    "${NOX_LOCAL_DEPS_DIR}/opus/opus.lib"
+    "${NOX_LOCAL_DEPS_DIR}/opus/lib/opus.lib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opus/opus.lib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opus/win32/opus.lib"
+)
+set(NOX_OPUS_DLL_CANDIDATES
+    "${NOX_LOCAL_DEPS_DIR}/opus/opus.dll"
+    "${NOX_LOCAL_DEPS_DIR}/opus/bin/opus.dll"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opus/opus.dll"
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opus/win32/opus.dll"
+)
+
+set(NOX_OPUS_LIB "")
+foreach(_nox_lib IN LISTS NOX_OPUS_LIB_CANDIDATES)
+    if(EXISTS "${_nox_lib}")
+        set(NOX_OPUS_LIB "${_nox_lib}")
+        break()
+    endif()
+endforeach()
+if(NOX_OPUS_LIB STREQUAL "")
+    message(FATAL_ERROR "Opus import library not found (checked local-deps/opus and thirdparty/opus).")
+endif()
+target_link_libraries(voip-client PRIVATE "${NOX_OPUS_LIB}")
+
+set(NOX_OPUS_DLL "")
+foreach(_nox_dll IN LISTS NOX_OPUS_DLL_CANDIDATES)
+    if(EXISTS "${_nox_dll}")
+        set(NOX_OPUS_DLL "${_nox_dll}")
+        break()
+    endif()
+endforeach()
+if(NOX_OPUS_DLL)
+    add_custom_command(TARGET voip-client POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${NOX_OPUS_DLL}"
+            "$<TARGET_FILE_DIR:voip-client>/opus.dll"
+        COMMENT "Copying Opus runtime DLL beside voip-client"
     )
-elseif(PERL_EXECUTABLE)
-    message(WARNING "Vendored OpenSSL source tree not found at thirdparty/openssl.")
-else()
-    message(WARNING "Perl executable not found in PATH. Perl source is vendored at thirdparty/perl5, but not built/installed.")
+endif()
+
+add_executable(voip-server ${NOX_SERVER_SOURCES})
+target_include_directories(voip-server PRIVATE ${PROJECT_INCLUDE_DIRS})
+target_link_libraries(voip-server PRIVATE Qt6::Core Qt6::Network)
+
+option(NOX_ENABLE_ASIO_BACKEND "Build Asio/Boost.Asio hybrid networking targets" ON)
+if(NOX_ENABLE_ASIO_BACKEND)
+    set(NOX_ASIO_LOCAL_INCLUDE "")
+    if(EXISTS "${NOX_LOCAL_DEPS_DIR}/asio/include/asio.hpp")
+        set(NOX_ASIO_LOCAL_INCLUDE "${NOX_LOCAL_DEPS_DIR}/asio/include")
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/asio/asio/include/asio.hpp")
+        set(NOX_ASIO_LOCAL_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/asio/asio/include")
+    endif()
+
+    check_include_file_cxx("asio.hpp" NOX_HAS_STANDALONE_ASIO)
+    check_include_file_cxx("boost/asio.hpp" NOX_HAS_BOOST_ASIO)
+    if(NOX_ASIO_LOCAL_INCLUDE OR NOX_HAS_STANDALONE_ASIO OR NOX_HAS_BOOST_ASIO)
+        add_executable(nox-asio-server server/asio_hybrid_server.cpp)
+        add_executable(nox-asio-client client/asio_hybrid_client.cpp)
+        target_include_directories(nox-asio-server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_include_directories(nox-asio-client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        if(NOX_ASIO_LOCAL_INCLUDE)
+            target_include_directories(nox-asio-server PRIVATE "${NOX_ASIO_LOCAL_INCLUDE}")
+            target_include_directories(nox-asio-client PRIVATE "${NOX_ASIO_LOCAL_INCLUDE}")
+            target_compile_definitions(nox-asio-server PRIVATE ASIO_STANDALONE)
+            target_compile_definitions(nox-asio-client PRIVATE ASIO_STANDALONE)
+        elseif(NOX_HAS_STANDALONE_ASIO)
+            target_compile_definitions(nox-asio-server PRIVATE ASIO_STANDALONE)
+            target_compile_definitions(nox-asio-client PRIVATE ASIO_STANDALONE)
+        else()
+            find_package(Boost REQUIRED COMPONENTS system)
+            target_link_libraries(nox-asio-server PRIVATE Boost::system)
+            target_link_libraries(nox-asio-client PRIVATE Boost::system)
+        endif()
+        if(WIN32)
+            target_link_libraries(nox-asio-server PRIVATE ws2_32)
+            target_link_libraries(nox-asio-client PRIVATE ws2_32)
+            target_link_libraries(nox-asio-server PRIVATE mswsock)
+            target_link_libraries(nox-asio-client PRIVATE mswsock)
+        endif()
+    else()
+        message(STATUS "Skipping nox-asio-* targets: neither asio.hpp nor boost/asio.hpp found.")
+    endif()
+endif()
+
+option(NOX_ENABLE_PROTOBUF_CONTROL "Enable protobuf control schema generation/bootstrap" OFF)
+if(NOX_ENABLE_PROTOBUF_CONTROL)
+    set(NOX_PROTOBUF_HINT_ROOTS
+        "${NOX_LOCAL_DEPS_DIR}/protobuf"
+        "C:/msys64/ucrt64"
+    )
+    foreach(_pb_root IN LISTS NOX_PROTOBUF_HINT_ROOTS)
+        if(EXISTS "${_pb_root}/include/google/protobuf/message.h")
+            set(Protobuf_INCLUDE_DIR "${_pb_root}/include")
+        endif()
+        if(EXISTS "${_pb_root}/bin/protoc.exe")
+            set(Protobuf_PROTOC_EXECUTABLE "${_pb_root}/bin/protoc.exe")
+        elseif(EXISTS "${_pb_root}/protoc.exe")
+            set(Protobuf_PROTOC_EXECUTABLE "${_pb_root}/protoc.exe")
+        endif()
+        if(EXISTS "${_pb_root}/lib/libprotobuf.dll.a")
+            set(Protobuf_LIBRARY "${_pb_root}/lib/libprotobuf.dll.a")
+        elseif(EXISTS "${_pb_root}/lib/libprotobuf.a")
+            set(Protobuf_LIBRARY "${_pb_root}/lib/libprotobuf.a")
+        elseif(EXISTS "${_pb_root}/lib/protobuf.lib")
+            set(Protobuf_LIBRARY "${_pb_root}/lib/protobuf.lib")
+        endif()
+    endforeach()
+
+    find_package(Protobuf QUIET)
+    if(NOT Protobuf_FOUND AND Protobuf_INCLUDE_DIR AND Protobuf_LIBRARY AND Protobuf_PROTOC_EXECUTABLE)
+        add_library(protobuf::libprotobuf UNKNOWN IMPORTED)
+        set_target_properties(protobuf::libprotobuf PROPERTIES
+            IMPORTED_LOCATION "${Protobuf_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${Protobuf_INCLUDE_DIR}"
+        )
+        set(Protobuf_FOUND TRUE)
+    endif()
+    if(Protobuf_FOUND)
+        set(NOX_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shared/protocol")
+        set(NOX_PROTO_FILE "${NOX_PROTO_DIR}/control.proto")
+        if(EXISTS "${NOX_PROTO_FILE}")
+            set(NOX_PROTO_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/proto")
+            file(MAKE_DIRECTORY "${NOX_PROTO_OUT_DIR}")
+            add_custom_command(
+                OUTPUT "${NOX_PROTO_OUT_DIR}/control.pb.cc" "${NOX_PROTO_OUT_DIR}/control.pb.h"
+                COMMAND ${Protobuf_PROTOC_EXECUTABLE}
+                    --cpp_out="${NOX_PROTO_OUT_DIR}"
+                    --proto_path="${NOX_PROTO_DIR}"
+                    "${NOX_PROTO_FILE}"
+                DEPENDS "${NOX_PROTO_FILE}"
+                COMMENT "Generating protobuf control messages"
+            )
+            add_library(nox-control-proto STATIC "${NOX_PROTO_OUT_DIR}/control.pb.cc")
+            target_include_directories(nox-control-proto PUBLIC "${NOX_PROTO_OUT_DIR}")
+            target_link_libraries(nox-control-proto PUBLIC protobuf::libprotobuf)
+            target_compile_definitions(voip-client PRIVATE NOX_HAS_PROTOBUF_CONTROL=1)
+            target_compile_definitions(voip-server PRIVATE NOX_HAS_PROTOBUF_CONTROL=1)
+            target_link_libraries(voip-client PRIVATE nox-control-proto)
+            target_link_libraries(voip-server PRIVATE nox-control-proto)
+        else()
+            message(WARNING "NOX_ENABLE_PROTOBUF_CONTROL=ON but shared/protocol/control.proto not found.")
+        endif()
+    else()
+        message(WARNING "NOX_ENABLE_PROTOBUF_CONTROL=ON but Protobuf was not found.")
+    endif()
+endif()
+
+option(NOX_BUILD_PORTAUDIO_PROBE "Build PortAudio + Opus pipeline probe app" ON)
+if(NOX_BUILD_PORTAUDIO_PROBE)
+    set(NOX_PORTAUDIO_HEADER_CANDIDATES
+        "${NOX_LOCAL_DEPS_DIR}/portaudio/include/portaudio.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/portaudio/include/portaudio.h"
+    )
+    set(NOX_PORTAUDIO_LIB_CANDIDATES
+        "${NOX_LOCAL_DEPS_DIR}/portaudio/portaudio.lib"
+        "${NOX_LOCAL_DEPS_DIR}/portaudio/lib/portaudio.lib"
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/portaudio/portaudio.lib"
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/portaudio/lib/portaudio.lib"
+    )
+    set(NOX_PORTAUDIO_DLL_CANDIDATES
+        "${NOX_LOCAL_DEPS_DIR}/portaudio/portaudio.dll"
+        "${NOX_LOCAL_DEPS_DIR}/portaudio/bin/portaudio.dll"
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/portaudio/portaudio.dll"
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/portaudio/bin/portaudio.dll"
+    )
+
+    set(NOX_PORTAUDIO_HEADER "")
+    foreach(_nox_header IN LISTS NOX_PORTAUDIO_HEADER_CANDIDATES)
+        if(EXISTS "${_nox_header}")
+            set(NOX_PORTAUDIO_HEADER "${_nox_header}")
+            break()
+        endif()
+    endforeach()
+
+    set(NOX_PORTAUDIO_LIB "")
+    foreach(_nox_lib IN LISTS NOX_PORTAUDIO_LIB_CANDIDATES)
+        if(EXISTS "${_nox_lib}")
+            set(NOX_PORTAUDIO_LIB "${_nox_lib}")
+            break()
+        endif()
+    endforeach()
+
+    if(NOX_PORTAUDIO_HEADER AND NOX_PORTAUDIO_LIB)
+        get_filename_component(NOX_PORTAUDIO_INCLUDE_DIR "${NOX_PORTAUDIO_HEADER}" DIRECTORY)
+
+        add_executable(opus-portaudio-probe tools/opus_portaudio_probe.cpp)
+        target_include_directories(opus-portaudio-probe PRIVATE
+            ${NOX_PORTAUDIO_INCLUDE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opus
+            ${NOX_LOCAL_DEPS_DIR}/opus/include
+        )
+        target_link_libraries(opus-portaudio-probe PRIVATE "${NOX_PORTAUDIO_LIB}" "${NOX_OPUS_LIB}")
+
+        if(WIN32)
+            target_link_libraries(opus-portaudio-probe PRIVATE ws2_32)
+        endif()
+
+        set(NOX_PORTAUDIO_DLL "")
+        foreach(_nox_dll IN LISTS NOX_PORTAUDIO_DLL_CANDIDATES)
+            if(EXISTS "${_nox_dll}")
+                set(NOX_PORTAUDIO_DLL "${_nox_dll}")
+                break()
+            endif()
+        endforeach()
+
+        if(NOX_OPUS_DLL)
+            add_custom_command(TARGET opus-portaudio-probe POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NOX_OPUS_DLL}"
+                    "$<TARGET_FILE_DIR:opus-portaudio-probe>/opus.dll"
+                COMMENT "Copying Opus runtime DLL beside opus-portaudio-probe"
+            )
+        endif()
+
+        if(NOX_PORTAUDIO_DLL)
+            add_custom_command(TARGET opus-portaudio-probe POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NOX_PORTAUDIO_DLL}"
+                    "$<TARGET_FILE_DIR:opus-portaudio-probe>/portaudio.dll"
+                COMMENT "Copying PortAudio runtime DLL beside opus-portaudio-probe"
+            )
+        endif()
+    else()
+        message(STATUS "Skipping opus-portaudio-probe: PortAudio header/lib not found (expected under local-deps/portaudio or thirdparty/portaudio).")
+    endif()
 endif()

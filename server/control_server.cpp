@@ -2,220 +2,403 @@
 
 #include <QDateTime>
 #include <QDebug>
-#include <QJsonArray>
-#include <QJsonObject>
+
+#include <algorithm>
 
 #include "shared/protocol/control_protocol.h"
+#include "shared/protocol/control_wire.h"
+#include "shared/hybrid/control_messages.h"
 
 namespace {
 constexpr qint64 kStaleMs = 15000;
+constexpr qint64 kActiveSpeakerWindowMs = 2500;
 }
 
 ControlServer::ControlServer(QObject *parent)
     : QObject(parent) {
     pruneTimer_.setInterval(2000);
     QObject::connect(&pruneTimer_, &QTimer::timeout, this, &ControlServer::onPruneTick);
+    presenceTimer_.setInterval(1000);
+    QObject::connect(&presenceTimer_, &QTimer::timeout, this, &ControlServer::broadcastPresence);
 }
 
 bool ControlServer::start(quint16 port) {
-    QObject::connect(&socket_, &QUdpSocket::readyRead,
-                     this, &ControlServer::onReadyRead,
-                     Qt::UniqueConnection);
+    listenPort_ = port;
+    QObject::connect(&mediaSocket_, &QUdpSocket::readyRead, this, &ControlServer::onMediaReadyRead, Qt::UniqueConnection);
+    QObject::connect(&controlServer_, &QTcpServer::newConnection, this, &ControlServer::onControlNewConnection, Qt::UniqueConnection);
 
-    const bool ok = socket_.bind(QHostAddress::AnyIPv4, port, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
-    if (ok) {
+    const bool mediaOk = mediaSocket_.bind(QHostAddress::AnyIPv4, port, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
+    const bool controlOk = controlServer_.listen(QHostAddress::AnyIPv4, port);
+    if (mediaOk && controlOk) {
         pruneTimer_.start();
+        presenceTimer_.start();
+        return true;
     }
-    return ok;
+    if (!mediaOk) {
+        qWarning() << "Failed to bind UDP media socket on port" << port;
+    }
+    if (!controlOk) {
+        qWarning() << "Failed to listen TCP control socket on port" << port << controlServer_.errorString();
+    }
+    return false;
 }
 
-void ControlServer::onReadyRead() {
-    while (socket_.hasPendingDatagrams()) {
+void ControlServer::onMediaReadyRead() {
+    while (mediaSocket_.hasPendingDatagrams()) {
         QByteArray datagram;
-        datagram.resize(static_cast<int>(socket_.pendingDatagramSize()));
+        datagram.resize(static_cast<int>(mediaSocket_.pendingDatagramSize()));
 
         QHostAddress sender;
         quint16 senderPort = 0;
-        socket_.readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
+        mediaSocket_.readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+
+        ctrlproto::VoicePacket voicePacket;
+        if (ctrlproto::decode_voice_packet(datagram, voicePacket)) {
+            auto *source = registry_.find(voicePacket.ssrc);
+            if (!source) {
+                continue;
+            }
+
+            source->online = true;
+            source->mediaAddress = sender;
+            source->mediaPort = senderPort;
+            source->lastSeenMs = nowMs;
+            source->lastAudioMs = nowMs;
+
+            const uint8_t sourceLayer = ctrlproto::voice_layer_from_flags(voicePacket.flags);
+            const QVector<ClientRegistry::ClientState> online = registry_.onlineClients();
+            for (const auto &receiver : online) {
+                if (!shouldForwardToReceiver(*source, receiver, nowMs)) {
+                    continue;
+                }
+                if (sourceLayer != preferredLayerForReceiver(receiver)) {
+                    continue;
+                }
+                sendRaw(datagram, receiver.mediaAddress, receiver.mediaPort);
+            }
+            continue;
+        }
 
         QJsonObject msg;
         if (!ctrlproto::decode(datagram, msg)) {
             continue;
         }
 
-        const QString type = msg.value(QStringLiteral("type")).toString();
-        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (msg.value(QStringLiteral("type")).toString() == QStringLiteral("discover_request")) {
+            mediaSocket_.writeDatagram(ctrlproto::encode(makeServerAnnounce()), sender, senderPort);
+        }
+    }
+}
 
-        if (type == QStringLiteral("ping")) {
-            for (auto it = users_.begin(); it != users_.end(); ++it) {
-                if (it->online && it->addr == sender && it->port == senderPort) {
-                    it->lastSeenMs = nowMs;
-                }
-            }
-
-            QJsonObject reply;
-            reply.insert(QStringLiteral("type"), QStringLiteral("pong"));
-            reply.insert(QStringLiteral("ping_id"), msg.value(QStringLiteral("ping_id")).toDouble(0));
-            sendTo(reply, sender, senderPort);
+void ControlServer::onControlNewConnection() {
+    while (controlServer_.hasPendingConnections()) {
+        QTcpSocket *socket = controlServer_.nextPendingConnection();
+        if (!socket) {
             continue;
         }
+        controlBuffers_.insert(socket, QByteArray{});
+        QObject::connect(socket, &QTcpSocket::readyRead, this, &ControlServer::onControlSocketReadyRead, Qt::UniqueConnection);
+        QObject::connect(socket, &QTcpSocket::disconnected, this, &ControlServer::onControlSocketDisconnected, Qt::UniqueConnection);
+    }
+}
 
-        if (type == QStringLiteral("join")) {
-            const uint32_t ssrc = static_cast<uint32_t>(msg.value(QStringLiteral("ssrc")).toDouble(0));
-            if (ssrc == 0) {
-                continue;
-            }
+void ControlServer::onControlSocketReadyRead() {
+    auto *socket = qobject_cast<QTcpSocket *>(sender());
+    if (!socket) {
+        return;
+    }
 
-            UserState &u = users_[ssrc];
-            u.ssrc = ssrc;
-            u.name = msg.value(QStringLiteral("name")).toString();
-            u.online = true;
-            u.addr = sender;
-            u.port = senderPort;
-            u.lastSeenMs = nowMs;
+    QByteArray &buffer = controlBuffers_[socket];
+    buffer.append(socket->readAll());
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
 
-            broadcastUsers();
+    while (true) {
+        const int newline = buffer.indexOf('\n');
+        if (newline < 0) {
+            break;
+        }
+        const QByteArray line = buffer.left(newline).trimmed();
+        buffer.remove(0, newline + 1);
+        if (line.isEmpty()) {
             continue;
         }
-
-        if (type == QStringLiteral("leave")) {
-            const uint32_t ssrc = static_cast<uint32_t>(msg.value(QStringLiteral("ssrc")).toDouble(0));
-            auto it = users_.find(ssrc);
-            if (it != users_.end()) {
-                it->online = false;
-                it->lastSeenMs = nowMs;
-                broadcastUsers();
-            }
+        ControlWireMessage wire;
+        if (!controlwire::decode(line, wire)) {
             continue;
         }
+        const QJsonObject msg = wire.json;
+        handleControlMessage(socket, msg, nowMs);
+    }
+}
 
-        if (type == QStringLiteral("talk")) {
-            const uint32_t ssrc = static_cast<uint32_t>(msg.value(QStringLiteral("ssrc")).toDouble(0));
-            auto it = users_.find(ssrc);
-            if (it != users_.end()) {
-                it->targets.clear();
+void ControlServer::onControlSocketDisconnected() {
+    auto *socket = qobject_cast<QTcpSocket *>(sender());
+    if (!socket) {
+        return;
+    }
+    registry_.markOfflineBySocket(socket);
+    controlBuffers_.remove(socket);
+    socket->deleteLater();
+    broadcastUsers();
+}
 
-                const QJsonArray targets = msg.value(QStringLiteral("targets")).toArray();
-                for (const QJsonValue &v : targets) {
-                    it->targets.push_back(static_cast<uint32_t>(v.toDouble(0)));
-                }
+void ControlServer::handleControlMessage(QTcpSocket *socket, const QJsonObject &msg, qint64 nowMs) {
+    const QString type = msg.value(QStringLiteral("type")).toString();
+    const QHostAddress senderAddr = socket->peerAddress();
 
-                it->online = true;
-                it->addr = sender;
-                it->port = senderPort;
-                it->lastSeenMs = nowMs;
+    if (type == QStringLiteral("hello")) {
+        const uint32_t assignedId = registry_.assignOrReuseId(socket);
+        hybridctrl::HelloAck ack;
+        ack.clientId = assignedId;
+        sendToControlSocket(hybridctrl::to_json(ack), socket);
+        return;
+    }
+
+    if (type == QStringLiteral("ping")) {
+        if (auto *u = registry_.findBySocket(socket)) {
+            u->lastSeenMs = nowMs;
+        }
+        QJsonObject reply;
+        reply.insert(QStringLiteral("type"), QStringLiteral("pong"));
+        reply.insert(QStringLiteral("ping_id"), msg.value(QStringLiteral("ping_id")).toDouble(0));
+        sendToControlSocket(reply, socket);
+        return;
+    }
+
+    if (type == QStringLiteral("join")) {
+        const uint32_t ssrc = static_cast<uint32_t>(msg.value(QStringLiteral("ssrc")).toDouble(0));
+        if (ssrc == 0) {
+            return;
+        }
+        const QString room = msg.value(QStringLiteral("room")).toString(QStringLiteral("default"));
+        registry_.updateJoin(ssrc,
+                             msg.value(QStringLiteral("name")).toString(),
+                             room,
+                             senderAddr,
+                             static_cast<quint16>(msg.value(QStringLiteral("udp_port")).toInt(0)),
+                             socket,
+                             nowMs);
+        broadcastUsers();
+        return;
+    }
+
+    if (type == QStringLiteral("leave")) {
+        const uint32_t ssrc = static_cast<uint32_t>(msg.value(QStringLiteral("ssrc")).toDouble(0));
+        registry_.markOfflineById(ssrc);
+        broadcastUsers();
+        return;
+    }
+
+    auto *user = registry_.findBySocket(socket);
+    if (!user) {
+        return;
+    }
+    user->lastSeenMs = nowMs;
+
+    if (type == QStringLiteral("talk")) {
+        QVector<uint32_t> targets;
+        for (const QJsonValue &v : msg.value(QStringLiteral("targets")).toArray()) {
+            const uint32_t t = static_cast<uint32_t>(v.toDouble(0));
+            if (t != 0) {
+                targets.push_back(t);
             }
-            continue;
+        }
+        registry_.setTalkTargets(user->clientId, targets);
+        return;
+    }
+
+    if (type == QStringLiteral("subscribe")) {
+        QSet<uint32_t> sources;
+        for (const QJsonValue &v : msg.value(QStringLiteral("sources")).toArray()) {
+            const uint32_t src = static_cast<uint32_t>(v.toDouble(0));
+            if (src != 0 && src != user->clientId) {
+                sources.insert(src);
+            }
+        }
+        registry_.setSubscriptions(user->clientId,
+                                   sources,
+                                   msg.value(QStringLiteral("max_streams")).toInt(user->maxStreams),
+                                   msg.value(QStringLiteral("filter_enabled")).toBool(false),
+                                   msg.value(QStringLiteral("preferred_layer")).toString());
+        return;
+    }
+
+    if (type == QStringLiteral("voice_feedback")) {
+        const uint32_t sourceSsrc = static_cast<uint32_t>(msg.value(QStringLiteral("source_ssrc")).toDouble(0));
+        auto *source = registry_.find(sourceSsrc);
+        if (!source || !source->online || source->controlSocket.isNull()) {
+            return;
         }
 
-        if (type == QStringLiteral("voice")) {
-            const uint32_t ssrc = static_cast<uint32_t>(msg.value(QStringLiteral("ssrc")).toDouble(0));
-            auto it = users_.find(ssrc);
-            if (it == users_.end()) {
-                continue;
-            }
+        user->rxLossEwma = (user->rxLossEwma * 0.8) + (static_cast<double>(msg.value(QStringLiteral("loss_pct")).toInt(0)) * 0.2);
+        user->rxJitterEwma = (user->rxJitterEwma * 0.8) + (static_cast<double>(msg.value(QStringLiteral("jitter_ms")).toInt(0)) * 0.2);
+        user->rxRttEwma = (user->rxRttEwma * 0.8) + (static_cast<double>(msg.value(QStringLiteral("rtt_ms")).toInt(0)) * 0.2);
 
-            it->online = true;
-            it->addr = sender;
-            it->port = senderPort;
-            it->lastSeenMs = nowMs;
+        QJsonObject feedback;
+        feedback.insert(QStringLiteral("type"), QStringLiteral("voice_feedback"));
+        feedback.insert(QStringLiteral("reporter_ssrc"), static_cast<double>(user->clientId));
+        feedback.insert(QStringLiteral("source_ssrc"), static_cast<double>(sourceSsrc));
+        feedback.insert(QStringLiteral("loss_pct"), msg.value(QStringLiteral("loss_pct")).toInt(0));
+        feedback.insert(QStringLiteral("jitter_ms"), msg.value(QStringLiteral("jitter_ms")).toInt(0));
+        feedback.insert(QStringLiteral("plc_pct"), msg.value(QStringLiteral("plc_pct")).toInt(0));
+        feedback.insert(QStringLiteral("fec_pct"), msg.value(QStringLiteral("fec_pct")).toInt(0));
+        feedback.insert(QStringLiteral("rtt_ms"), msg.value(QStringLiteral("rtt_ms")).toInt(0));
+        sendToControlSocket(feedback, source->controlSocket.data());
+        return;
+    }
 
-            const QString pcmB64 = msg.value(QStringLiteral("pcm")).toString();
-            if (pcmB64.isEmpty()) {
-                continue;
-            }
-
-            QJsonObject forward;
-            forward.insert(QStringLiteral("type"), QStringLiteral("voice"));
-            forward.insert(QStringLiteral("ssrc"), static_cast<double>(ssrc));
-            forward.insert(QStringLiteral("pcm"), pcmB64);
-
-            if (it->targets.isEmpty()) {
-                for (const UserState &u : users_) {
-                    if (!u.online || u.ssrc == ssrc || u.addr.isNull() || u.port == 0) {
-                        continue;
-                    }
-                    qDebug() << "Forwarding voice from" << ssrc << "to" << u.ssrc;
-                    sendTo(forward, u.addr, u.port);
-                }
-            } else {
-                for (uint32_t targetSsrc : it->targets) {
-                    auto targetIt = users_.find(targetSsrc);
-                    if (targetIt == users_.end()) {
-                        continue;
-                    }
-                    const UserState &u = *targetIt;
-                    if (!u.online || u.ssrc == ssrc || u.addr.isNull() || u.port == 0) {
-                        continue;
-                    }
-                    qDebug() << "Forwarding voice from" << ssrc << "to" << u.ssrc;
-                    sendTo(forward, u.addr, u.port);
-                }
-            }
-            continue;
-        }
-
-        if (type == QStringLiteral("list")) {
-            for (auto it = users_.begin(); it != users_.end(); ++it) {
-                if (it->online && it->addr == sender && it->port == senderPort) {
-                    it->lastSeenMs = nowMs;
-                }
-            }
-
-            QJsonObject reply;
-            reply.insert(QStringLiteral("type"), QStringLiteral("users"));
-            reply.insert(QStringLiteral("users"), onlineUsersAsJson());
-            sendTo(reply, sender, senderPort);
-            continue;
-        }
+    if (type == QStringLiteral("list")) {
+        QJsonObject reply;
+        reply.insert(QStringLiteral("type"), QStringLiteral("users"));
+        reply.insert(QStringLiteral("users"), onlineUsersAsJson());
+        sendToControlSocket(reply, socket);
     }
 }
 
 void ControlServer::onPruneTick() {
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     bool changed = false;
-
-    for (auto it = users_.begin(); it != users_.end(); ++it) {
-        if (it->online && (nowMs - it->lastSeenMs) > kStaleMs) {
-            it->online = false;
+    for (const auto &u : registry_.onlineClients()) {
+        if ((nowMs - u.lastSeenMs) > kStaleMs) {
+            registry_.markOfflineById(u.clientId);
             changed = true;
         }
     }
-
     if (changed) {
         broadcastUsers();
     }
 }
 
-void ControlServer::sendTo(const QJsonObject &obj, const QHostAddress &addr, quint16 port) {
-    socket_.writeDatagram(ctrlproto::encode(obj), addr, port);
+void ControlServer::sendToControlSocket(const QJsonObject &obj, QTcpSocket *socket) {
+    if (!socket || socket->state() != QAbstractSocket::ConnectedState) {
+        return;
+    }
+    QByteArray payload = controlwire::encode(
+        obj,
+#if defined(NOX_HAS_PROTOBUF_CONTROL)
+        ControlWireFormat::Protobuf
+#else
+        ControlWireFormat::Json
+#endif
+    );
+    payload.append('\n');
+    socket->write(payload);
+}
+
+uint8_t ControlServer::preferredLayerForReceiver(const ClientRegistry::ClientState &receiver) const {
+    if (receiver.preferredLayer == QStringLiteral("low")) {
+        return ctrlproto::kVoiceLayerLow;
+    }
+    if (receiver.preferredLayer == QStringLiteral("high")) {
+        return ctrlproto::kVoiceLayerHigh;
+    }
+    if (receiver.rxLossEwma > 8.0 || receiver.rxJitterEwma > 35.0 || receiver.rxRttEwma > 160.0) {
+        return ctrlproto::kVoiceLayerLow;
+    }
+    return ctrlproto::kVoiceLayerHigh;
+}
+
+bool ControlServer::shouldForwardToReceiver(const ClientRegistry::ClientState &source, const ClientRegistry::ClientState &receiver, qint64 nowMs) const {
+    if (!receiver.online || receiver.clientId == source.clientId || receiver.mediaAddress.isNull() || receiver.mediaPort == 0) {
+        return false;
+    }
+    if (source.room != receiver.room) {
+        return false;
+    }
+    if (!source.targets.isEmpty() && !source.targets.contains(receiver.clientId)) {
+        return false;
+    }
+    if (receiver.subscriptionFilterEnabled && !receiver.subscriptions.contains(source.clientId)) {
+        return false;
+    }
+    if (receiver.maxStreams <= 0) {
+        return true;
+    }
+    const QVector<uint32_t> topSources = topForwardableSourcesForReceiver(receiver, nowMs);
+    return topSources.contains(source.clientId);
+}
+
+QVector<uint32_t> ControlServer::topForwardableSourcesForReceiver(const ClientRegistry::ClientState &receiver, qint64 nowMs) const {
+    QVector<ClientRegistry::ClientState> candidates;
+    for (const auto &src : registry_.onlineClients()) {
+        if (!src.online || src.clientId == receiver.clientId || src.mediaAddress.isNull() || src.mediaPort == 0) {
+            continue;
+        }
+        if (src.room != receiver.room) {
+            continue;
+        }
+        if ((nowMs - src.lastAudioMs) > kActiveSpeakerWindowMs) {
+            continue;
+        }
+        if (!src.targets.isEmpty() && !src.targets.contains(receiver.clientId)) {
+            continue;
+        }
+        if (receiver.subscriptionFilterEnabled && !receiver.subscriptions.contains(src.clientId)) {
+            continue;
+        }
+        candidates.push_back(src);
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto &a, const auto &b) {
+        if (a.lastAudioMs != b.lastAudioMs) {
+            return a.lastAudioMs > b.lastAudioMs;
+        }
+        return a.clientId < b.clientId;
+    });
+
+    QVector<uint32_t> result;
+    const int n = std::min(receiver.maxStreams, static_cast<int>(candidates.size()));
+    result.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        result.push_back(candidates[i].clientId);
+    }
+    return result;
+}
+
+QJsonObject ControlServer::makeServerAnnounce() const {
+    QJsonObject announce;
+    announce.insert(QStringLiteral("type"), QStringLiteral("server_announce"));
+    announce.insert(QStringLiteral("port"), static_cast<int>(listenPort_));
+    announce.insert(QStringLiteral("name"), QStringLiteral("Nox SFU"));
+    announce.insert(QStringLiteral("control"), QStringLiteral("tcp"));
+    announce.insert(QStringLiteral("media"), QStringLiteral("udp"));
+    announce.insert(QStringLiteral("protocol"), QStringLiteral("json"));
+    announce.insert(QStringLiteral("proto_version"), hybridctrl::kProtocolVersion);
+    return announce;
+}
+
+void ControlServer::sendRaw(const QByteArray &payload, const QHostAddress &addr, quint16 port) {
+    mediaSocket_.writeDatagram(payload, addr, port);
 }
 
 void ControlServer::broadcastUsers() {
     QJsonObject packet;
     packet.insert(QStringLiteral("type"), QStringLiteral("users"));
     packet.insert(QStringLiteral("users"), onlineUsersAsJson());
-
-    for (const UserState &u : users_) {
-        if (u.online && !u.addr.isNull() && u.port != 0) {
-            sendTo(packet, u.addr, u.port);
+    for (const auto &u : registry_.onlineClients()) {
+        if (!u.controlSocket.isNull()) {
+            sendToControlSocket(packet, u.controlSocket.data());
         }
     }
 }
 
 QJsonArray ControlServer::onlineUsersAsJson() const {
     QJsonArray usersJson;
-    for (const UserState &u : users_) {
-        if (!u.online) {
-            continue;
-        }
-
+    for (const auto &u : registry_.onlineClients()) {
         QJsonObject item;
-        item.insert(QStringLiteral("ssrc"), static_cast<double>(u.ssrc));
+        item.insert(QStringLiteral("ssrc"), static_cast<double>(u.clientId));
         item.insert(QStringLiteral("name"), u.name);
         item.insert(QStringLiteral("online"), 1);
+        item.insert(QStringLiteral("room"), u.room);
         usersJson.push_back(item);
     }
     return usersJson;
 }
 
+void ControlServer::broadcastPresence() {
+    if (listenPort_ == 0) {
+        return;
+    }
+    mediaSocket_.writeDatagram(ctrlproto::encode(makeServerAnnounce()), QHostAddress::Broadcast, listenPort_);
+}

@@ -193,6 +193,50 @@
           </property>
          </widget>
         </item>
+        <item>
+         <widget class="QCheckBox" name="chkSelectiveHearing">
+          <property name="text">
+           <string>Enable Selective Hearing</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnHearSelected">
+          <property name="text">
+           <string>Hear Selected Clients</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="layerPrefLayout">
+          <item>
+           <widget class="QLabel" name="lblLayerPref">
+            <property name="text">
+             <string>Receive Layer</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="comboLayerPref">
+            <item>
+             <property name="text">
+              <string>Auto</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>High</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Low</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+         </layout>
+        </item>
        </layout>
       </widget>
       <widget class="QWidget" name="rightPanel">
