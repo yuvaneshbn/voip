@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.21)
 
 if(WIN32)
     set(_NOX_QT_MINGW_GCC_CANDIDATES
+        "${CMAKE_CURRENT_LIST_DIR}/local-deps/mingw/bin/gcc.exe"
+        "$ENV{MINGW_ROOT}/bin/gcc.exe"
         "C:/Qt/Tools/mingw1310_64/bin/gcc.exe"
         "C:/Qt/Tools/mingw1120_64/bin/gcc.exe"
     )
