@@ -1,7 +1,12 @@
 #include "control_server.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
+#include <QFile>
+#include <QRandomGenerator>
+#include <QSslConfiguration>
+#include <QTcpSocket>
 
 #include <algorithm>
 
@@ -12,6 +17,8 @@
 namespace {
 constexpr qint64 kStaleMs = 15000;
 constexpr qint64 kActiveSpeakerWindowMs = 2500;
+constexpr qint64 kServerPingIntervalMs = 5000;
+constexpr qint64 kKeepaliveMissWindowMs = (kServerPingIntervalMs * 2) + 500;
 }
 
 ControlServer::ControlServer(QObject *parent)
@@ -23,6 +30,17 @@ ControlServer::ControlServer(QObject *parent)
 }
 
 bool ControlServer::start(quint16 port) {
+    if (!loadTlsConfiguration()) {
+        qWarning() << "TLS configuration failed. Control channel will not start.";
+        return false;
+    }
+
+    mediaSessionKeyRaw_.resize(32);
+    for (int i = 0; i < mediaSessionKeyRaw_.size(); ++i) {
+        mediaSessionKeyRaw_[i] = static_cast<char>(QRandomGenerator::system()->bounded(0, 256));
+    }
+    mediaSessionKeyB64_ = QString::fromLatin1(mediaSessionKeyRaw_.toBase64());
+
     listenPort_ = port;
     QObject::connect(&mediaSocket_, &QUdpSocket::readyRead, this, &ControlServer::onMediaReadyRead, Qt::UniqueConnection);
     QObject::connect(&controlServer_, &QTcpServer::newConnection, this, &ControlServer::onControlNewConnection, Qt::UniqueConnection);
@@ -93,18 +111,39 @@ void ControlServer::onMediaReadyRead() {
 
 void ControlServer::onControlNewConnection() {
     while (controlServer_.hasPendingConnections()) {
-        QTcpSocket *socket = controlServer_.nextPendingConnection();
-        if (!socket) {
+        QTcpSocket *plainSocket = controlServer_.nextPendingConnection();
+        if (!plainSocket) {
             continue;
         }
+
+        const qintptr descriptor = plainSocket->socketDescriptor();
+        plainSocket->deleteLater();
+
+        auto *socket = new QSslSocket(this);
+        if (!socket->setSocketDescriptor(descriptor)) {
+            qWarning() << "Failed to attach TLS socket descriptor";
+            socket->deleteLater();
+            continue;
+        }
+        socket->setPrivateKey(tlsPrivateKey_);
+        socket->setLocalCertificate(tlsCertificate_);
+        socket->setProtocol(QSsl::TlsV1_2OrLater);
+        socket->startServerEncryption();
+
         controlBuffers_.insert(socket, QByteArray{});
-        QObject::connect(socket, &QTcpSocket::readyRead, this, &ControlServer::onControlSocketReadyRead, Qt::UniqueConnection);
-        QObject::connect(socket, &QTcpSocket::disconnected, this, &ControlServer::onControlSocketDisconnected, Qt::UniqueConnection);
+        QObject::connect(socket, &QSslSocket::readyRead, this, &ControlServer::onControlSocketReadyRead, Qt::UniqueConnection);
+        QObject::connect(socket, &QSslSocket::disconnected, this, &ControlServer::onControlSocketDisconnected, Qt::UniqueConnection);
+        QObject::connect(socket, &QSslSocket::sslErrors, this,
+                         [socket](const QList<QSslError> &errors) {
+                             qWarning() << "Control TLS sslErrors:" << errors;
+                             socket->ignoreSslErrors();
+                         },
+                         Qt::UniqueConnection);
     }
 }
 
 void ControlServer::onControlSocketReadyRead() {
-    auto *socket = qobject_cast<QTcpSocket *>(sender());
+    auto *socket = qobject_cast<QSslSocket *>(sender());
     if (!socket) {
         return;
     }
@@ -133,7 +172,7 @@ void ControlServer::onControlSocketReadyRead() {
 }
 
 void ControlServer::onControlSocketDisconnected() {
-    auto *socket = qobject_cast<QTcpSocket *>(sender());
+    auto *socket = qobject_cast<QSslSocket *>(sender());
     if (!socket) {
         return;
     }
@@ -143,14 +182,26 @@ void ControlServer::onControlSocketDisconnected() {
     broadcastUsers();
 }
 
-void ControlServer::handleControlMessage(QTcpSocket *socket, const QJsonObject &msg, qint64 nowMs) {
+void ControlServer::handleControlMessage(QSslSocket *socket, const QJsonObject &msg, qint64 nowMs) {
     const QString type = msg.value(QStringLiteral("type")).toString();
     const QHostAddress senderAddr = socket->peerAddress();
 
     if (type == QStringLiteral("hello")) {
+        const int protocolVersion = msg.value(QStringLiteral("protocol_version")).toInt(-1);
+        if (protocolVersion != hybridctrl::kProtocolVersion) {
+            QJsonObject error;
+            error.insert(QStringLiteral("type"), QStringLiteral("error"));
+            error.insert(QStringLiteral("reason"), QStringLiteral("protocol_version_mismatch"));
+            error.insert(QStringLiteral("expected"), hybridctrl::kProtocolVersion);
+            error.insert(QStringLiteral("received"), protocolVersion);
+            sendToControlSocket(error, socket);
+            socket->disconnectFromHost();
+            return;
+        }
         const uint32_t assignedId = registry_.assignOrReuseId(socket);
         hybridctrl::HelloAck ack;
         ack.clientId = assignedId;
+        ack.mediaSessionKeyB64 = mediaSessionKeyB64_;
         sendToControlSocket(hybridctrl::to_json(ack), socket);
         return;
     }
@@ -166,10 +217,27 @@ void ControlServer::handleControlMessage(QTcpSocket *socket, const QJsonObject &
         return;
     }
 
+    if (type == QStringLiteral("pong")) {
+        if (auto *u = registry_.findBySocket(socket)) {
+            u->lastSeenMs = nowMs;
+        }
+        return;
+    }
+
     if (type == QStringLiteral("join")) {
         const uint32_t ssrc = static_cast<uint32_t>(msg.value(QStringLiteral("ssrc")).toDouble(0));
         if (ssrc == 0) {
             return;
+        }
+        for (const auto &existing : registry_.onlineClients()) {
+            if (existing.clientId == ssrc && existing.controlSocket.data() != socket) {
+                QJsonObject error;
+                error.insert(QStringLiteral("type"), QStringLiteral("error"));
+                error.insert(QStringLiteral("reason"), QStringLiteral("duplicate_ssrc"));
+                error.insert(QStringLiteral("ssrc"), static_cast<double>(ssrc));
+                sendToControlSocket(error, socket);
+                return;
+            }
         }
         const QString room = msg.value(QStringLiteral("room")).toString(QStringLiteral("default"));
         registry_.updateJoin(ssrc,
@@ -179,6 +247,12 @@ void ControlServer::handleControlMessage(QTcpSocket *socket, const QJsonObject &
                              static_cast<quint16>(msg.value(QStringLiteral("udp_port")).toInt(0)),
                              socket,
                              nowMs);
+        QJsonObject ack;
+        ack.insert(QStringLiteral("type"), QStringLiteral("join_ack"));
+        ack.insert(QStringLiteral("ok"), true);
+        ack.insert(QStringLiteral("ssrc"), static_cast<double>(ssrc));
+        ack.insert(QStringLiteral("room"), room);
+        sendToControlSocket(ack, socket);
         broadcastUsers();
         return;
     }
@@ -186,6 +260,11 @@ void ControlServer::handleControlMessage(QTcpSocket *socket, const QJsonObject &
     if (type == QStringLiteral("leave")) {
         const uint32_t ssrc = static_cast<uint32_t>(msg.value(QStringLiteral("ssrc")).toDouble(0));
         registry_.markOfflineById(ssrc);
+        QJsonObject ack;
+        ack.insert(QStringLiteral("type"), QStringLiteral("leave_ack"));
+        ack.insert(QStringLiteral("ok"), true);
+        ack.insert(QStringLiteral("ssrc"), static_cast<double>(ssrc));
+        sendToControlSocket(ack, socket);
         broadcastUsers();
         return;
     }
@@ -205,6 +284,16 @@ void ControlServer::handleControlMessage(QTcpSocket *socket, const QJsonObject &
             }
         }
         registry_.setTalkTargets(user->clientId, targets);
+        QJsonObject ack;
+        ack.insert(QStringLiteral("type"), QStringLiteral("talk_ack"));
+        ack.insert(QStringLiteral("ok"), true);
+        ack.insert(QStringLiteral("ssrc"), static_cast<double>(user->clientId));
+        QJsonArray targetsArr;
+        for (uint32_t target : targets) {
+            targetsArr.push_back(static_cast<double>(target));
+        }
+        ack.insert(QStringLiteral("targets"), targetsArr);
+        sendToControlSocket(ack, socket);
         return;
     }
 
@@ -221,6 +310,14 @@ void ControlServer::handleControlMessage(QTcpSocket *socket, const QJsonObject &
                                    msg.value(QStringLiteral("max_streams")).toInt(user->maxStreams),
                                    msg.value(QStringLiteral("filter_enabled")).toBool(false),
                                    msg.value(QStringLiteral("preferred_layer")).toString());
+        QJsonObject ack;
+        ack.insert(QStringLiteral("type"), QStringLiteral("subscribe_ack"));
+        ack.insert(QStringLiteral("ok"), true);
+        ack.insert(QStringLiteral("ssrc"), static_cast<double>(user->clientId));
+        ack.insert(QStringLiteral("max_streams"), user->maxStreams);
+        ack.insert(QStringLiteral("filter_enabled"), user->subscriptionFilterEnabled);
+        ack.insert(QStringLiteral("preferred_layer"), user->preferredLayer);
+        sendToControlSocket(ack, socket);
         return;
     }
 
@@ -260,17 +357,36 @@ void ControlServer::onPruneTick() {
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     bool changed = false;
     for (const auto &u : registry_.onlineClients()) {
+        if ((nowMs - u.lastSeenMs) > kKeepaliveMissWindowMs) {
+            registry_.markOfflineById(u.clientId);
+            changed = true;
+            continue;
+        }
         if ((nowMs - u.lastSeenMs) > kStaleMs) {
             registry_.markOfflineById(u.clientId);
             changed = true;
         }
     }
+
+    static qint64 lastServerPingMs = 0;
+    if ((nowMs - lastServerPingMs) >= kServerPingIntervalMs) {
+        lastServerPingMs = nowMs;
+        QJsonObject ping;
+        ping.insert(QStringLiteral("type"), QStringLiteral("ping"));
+        ping.insert(QStringLiteral("ping_id"), static_cast<double>(nowMs & 0x7FFFFFFF));
+        for (const auto &u : registry_.onlineClients()) {
+            if (!u.controlSocket.isNull()) {
+                sendToControlSocket(ping, u.controlSocket.data());
+            }
+        }
+    }
+
     if (changed) {
         broadcastUsers();
     }
 }
 
-void ControlServer::sendToControlSocket(const QJsonObject &obj, QTcpSocket *socket) {
+void ControlServer::sendToControlSocket(const QJsonObject &obj, QSslSocket *socket) {
     if (!socket || socket->state() != QAbstractSocket::ConnectedState) {
         return;
     }
@@ -284,6 +400,36 @@ void ControlServer::sendToControlSocket(const QJsonObject &obj, QTcpSocket *sock
     );
     payload.append('\n');
     socket->write(payload);
+}
+
+bool ControlServer::loadTlsConfiguration() {
+    const QString certEnv = qEnvironmentVariable("NOX_TLS_CERT");
+    const QString keyEnv = qEnvironmentVariable("NOX_TLS_KEY");
+
+    const QString certPath = certEnv.isEmpty()
+                                 ? QCoreApplication::applicationDirPath() + QStringLiteral("/server.crt")
+                                 : certEnv;
+    const QString keyPath = keyEnv.isEmpty()
+                                ? QCoreApplication::applicationDirPath() + QStringLiteral("/server.key")
+                                : keyEnv;
+
+    QFile certFile(certPath);
+    QFile keyFile(keyPath);
+    if (!certFile.open(QIODevice::ReadOnly) || !keyFile.open(QIODevice::ReadOnly)) {
+        qWarning() << "TLS cert/key not found. Expected cert:" << certPath << "key:" << keyPath;
+        return false;
+    }
+
+    const QByteArray certPem = certFile.readAll();
+    const QByteArray keyPem = keyFile.readAll();
+
+    tlsCertificate_ = QSslCertificate(certPem, QSsl::Pem);
+    tlsPrivateKey_ = QSslKey(keyPem, QSsl::Rsa, QSsl::Pem);
+    if (tlsCertificate_.isNull() || tlsPrivateKey_.isNull()) {
+        qWarning() << "Failed parsing TLS cert/key.";
+        return false;
+    }
+    return true;
 }
 
 uint8_t ControlServer::preferredLayerForReceiver(const ClientRegistry::ClientState &receiver) const {

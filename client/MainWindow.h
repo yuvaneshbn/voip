@@ -3,10 +3,12 @@
 #include <QMainWindow>
 #include <QProgressBar>
 #include <QSet>
+#include <QThread>
 #include <QTimer>
 #include <QVector>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -78,7 +80,9 @@ private:
     uint32_t localSsrc_ = 0;
 
     std::unique_ptr<ControlClient> control_;
+    std::unique_ptr<QThread> controlThread_;
     std::unique_ptr<AudioEngine> audio_;
+    std::unique_ptr<QThread> audioThread_;
     std::unique_ptr<ServerDiscoveryService> discovery_;
 
     QVector<Client> clients_;
@@ -93,6 +97,7 @@ private:
     bool selectiveHearingEnabled_ = false;
     QString preferredLayer_ = QStringLiteral("auto");
     bool isPushToTalkPressed_ = false;
+    bool audioCaptureActive_ = false;
     std::vector<int> pingSamplesMs_;
     int pingFailureStreak_ = 0;
     int badCounter_ = 0;
@@ -115,6 +120,8 @@ private:
     void updateCallStage();
     void updateAudioControls();
     void updateSelectiveHearingState();
+    void invokeOnAudioThread(const std::function<void()> &fn) const;
+    void invokeOnControlThread(const std::function<void()> &fn) const;
 
     Client *findClientById(const QString &id);
     void applyOccupiedTargets(const QVector<Client>& selectedOnline);

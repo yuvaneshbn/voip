@@ -5,8 +5,10 @@
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSslCertificate>
+#include <QSslKey>
+#include <QSslSocket>
 #include <QTcpServer>
-#include <QTcpSocket>
 #include <QTimer>
 #include <QUdpSocket>
 #include <QVector>
@@ -32,8 +34,9 @@ private slots:
     void broadcastPresence();
 
 private:
-    void handleControlMessage(QTcpSocket *socket, const QJsonObject &msg, qint64 nowMs);
-    void sendToControlSocket(const QJsonObject &obj, QTcpSocket *socket);
+    bool loadTlsConfiguration();
+    void handleControlMessage(QSslSocket *socket, const QJsonObject &msg, qint64 nowMs);
+    void sendToControlSocket(const QJsonObject &obj, QSslSocket *socket);
     uint8_t preferredLayerForReceiver(const ClientRegistry::ClientState &receiver) const;
     bool shouldForwardToReceiver(const ClientRegistry::ClientState &source, const ClientRegistry::ClientState &receiver, qint64 nowMs) const;
     QVector<uint32_t> topForwardableSourcesForReceiver(const ClientRegistry::ClientState &receiver, qint64 nowMs) const;
@@ -44,10 +47,14 @@ private:
 
     QUdpSocket mediaSocket_;
     QTcpServer controlServer_;
-    QHash<QTcpSocket *, QByteArray> controlBuffers_;
+    QHash<QSslSocket *, QByteArray> controlBuffers_;
     QTimer pruneTimer_;
     QTimer presenceTimer_;
     quint16 listenPort_ = 0;
+    QSslCertificate tlsCertificate_;
+    QSslKey tlsPrivateKey_;
+    QByteArray mediaSessionKeyRaw_;
+    QString mediaSessionKeyB64_;
     ClientRegistry registry_;
 };
 

@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QSet>
 
 #include <cstdint>
 
@@ -21,6 +22,8 @@ public:
     bool decodeFecFromNext(uint32_t ssrc, const QByteArray &nextOpusPayload, QByteArray &pcm16leOut);
     bool decodePlc(uint32_t ssrc, QByteArray &pcm16leOut);
     bool setBitrate(int bps, int expectedLossPct);
+    void removeDecoder(uint32_t ssrc);
+    void retainDecoders(const QSet<uint32_t> &activeSsrcs);
 
 private:
     OpusDecoder *ensureDecoder(uint32_t ssrc);

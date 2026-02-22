@@ -1,5 +1,6 @@
 #include "AudioEngine.h"
 #include "client/audio/AecProcessor.h"
+#include "constants.h"
 
 #include <QAudioDevice>
 #include <QAudioSink>
@@ -10,14 +11,20 @@
 #include <algorithm>
 
 namespace {
-constexpr int kSampleRate = 48000;
+constexpr int kSampleRate = SAMPLE_RATE;
 constexpr int kChannels = 1;
 constexpr int kBytesPerSample = 2;
-constexpr int kFrameMs = 20;
+constexpr int kFrameMs = AUDIO_FRAME_MS;
 }
 
 AudioEngine::AudioEngine(QObject *parent)
     : QObject(parent) {
+    mediaDevices_ = std::make_unique<QMediaDevices>();
+    QObject::connect(mediaDevices_.get(), &QMediaDevices::audioInputsChanged,
+                     this, &AudioEngine::onAudioDevicesChanged, Qt::UniqueConnection);
+    QObject::connect(mediaDevices_.get(), &QMediaDevices::audioOutputsChanged,
+                     this, &AudioEngine::onAudioDevicesChanged, Qt::UniqueConnection);
+
     playbackFlushTimer_.setInterval(10);
     QObject::connect(&playbackFlushTimer_, &QTimer::timeout,
                      this, &AudioEngine::flushPlaybackBuffer);
@@ -33,6 +40,7 @@ bool AudioEngine::start() {
     const QAudioDevice inputDevice = QMediaDevices::defaultAudioInput();
     const QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
     if (inputDevice.isNull() || outputDevice.isNull()) {
+        running_ = false;
         return false;
     }
 
@@ -40,6 +48,7 @@ bool AudioEngine::start() {
     if (!inputDevice.isFormatSupported(format) || !outputDevice.isFormatSupported(format)) {
         qWarning() << "Required audio format not supported (need 48kHz mono Int16). Input:"
                    << inputDevice.description() << "Output:" << outputDevice.description();
+        running_ = false;
         return false;
     }
     ioFormat_ = format;
@@ -57,6 +66,7 @@ bool AudioEngine::start() {
 
     output_ = std::make_unique<QAudioSink>(outputDevice, ioFormat_, this);
     if (!output_) {
+        running_ = false;
         return false;
     }
 
@@ -71,10 +81,12 @@ bool AudioEngine::start() {
     playbackFlushTimer_.start();
 
     ensureCaptureState();
+    running_ = true;
     return true;
 }
 
 void AudioEngine::stop() {
+    running_ = false;
     stopCapture();
     playbackFlushTimer_.stop();
     playbackDevice_ = nullptr;
@@ -223,15 +235,18 @@ void AudioEngine::startCaptureIfNeeded() {
                    << "format:" << ioFormat_;
         input_->stop();
         input_.reset();
+        emit captureActiveChanged(false);
         return;
     }
 
     QObject::connect(captureDevice_, &QIODevice::readyRead,
                      this, &AudioEngine::onCaptureReadyRead, Qt::UniqueConnection);
     input_->setVolume(inputGain_);
+    emit captureActiveChanged(true);
 }
 
 void AudioEngine::stopCapture() {
+    const bool wasActive = (captureDevice_ != nullptr);
     if (captureDevice_) {
         QObject::disconnect(captureDevice_, nullptr, this, nullptr);
     }
@@ -243,6 +258,9 @@ void AudioEngine::stopCapture() {
     captureDevice_ = nullptr;
     captureBuffer_.clear();
     input_.reset();
+    if (wasActive) {
+        emit captureActiveChanged(false);
+    }
 }
 
 void AudioEngine::flushPlaybackBuffer() {
@@ -263,5 +281,24 @@ void AudioEngine::flushPlaybackBuffer() {
         }
         playbackBuffer_.remove(0, static_cast<int>(written));
     }
+}
+
+void AudioEngine::onAudioDevicesChanged() {
+    if (!running_) {
+        return;
+    }
+
+    const bool wasMuted = muted_;
+    const bool wasTransmitEnabled = transmitEnabled_;
+    qInfo() << "Audio device topology changed; restarting audio engine.";
+
+    stop();
+    if (!start()) {
+        qWarning() << "Failed to restart audio after device change.";
+        return;
+    }
+
+    setMuted(wasMuted);
+    setTransmitEnabled(wasTransmitEnabled);
 }
 

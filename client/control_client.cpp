@@ -7,13 +7,24 @@
 #include <QElapsedTimer>
 #include <QHostInfo>
 #include <QRandomGenerator>
+#include <QSslError>
 #include <QThread>
 #include <QTimer>
 
 #include <algorithm>
 #include <cmath>
 
+#include "shared/hybrid/control_messages.h"
 #include "shared/protocol/control_wire.h"
+
+namespace {
+constexpr int kAckTimeoutMs = 1200;
+constexpr int kAckMaxRetries = 2;
+constexpr int kReconnectBackoffMinMs = 1000;
+constexpr int kReconnectBackoffMaxMs = 16000;
+constexpr int kClientKeepaliveIntervalMs = 3000;
+constexpr int kClientKeepaliveMissLimit = 2;
+} // namespace
 
 ControlClient::ControlClient(QObject *parent)
     : QObject(parent) {
@@ -26,12 +37,31 @@ ControlClient::ControlClient(QObject *parent)
 
     QObject::connect(&mediaSocket_, &QUdpSocket::readyRead,
                      this, &ControlClient::onUdpReadyRead, Qt::UniqueConnection);
-    QObject::connect(&controlSocket_, &QTcpSocket::readyRead,
+    QObject::connect(&controlSocket_, &QSslSocket::readyRead,
                      this, &ControlClient::onControlReadyRead, Qt::UniqueConnection);
-    QObject::connect(&controlSocket_, &QTcpSocket::connected,
+    QObject::connect(&controlSocket_, &QSslSocket::encrypted,
                      this, &ControlClient::onControlConnected, Qt::UniqueConnection);
-    QObject::connect(&controlSocket_, &QTcpSocket::disconnected,
+    QObject::connect(&controlSocket_, &QSslSocket::disconnected,
                      this, &ControlClient::onControlDisconnected, Qt::UniqueConnection);
+    QObject::connect(&controlSocket_, &QSslSocket::sslErrors, this,
+                     [this](const QList<QSslError> &errors) {
+                         qWarning() << "TLS sslErrors on control channel:" << errors;
+                         // Allow self-signed certs in LAN/dev deployments.
+                         controlSocket_.ignoreSslErrors();
+                     },
+                     Qt::UniqueConnection);
+
+    controlSocket_.setPeerVerifyMode(QSslSocket::VerifyNone);
+
+    ackTimer_.setInterval(100);
+    QObject::connect(&ackTimer_, &QTimer::timeout, this, &ControlClient::onAckTick, Qt::UniqueConnection);
+
+    reconnectTimer_.setSingleShot(true);
+    QObject::connect(&reconnectTimer_, &QTimer::timeout, this, &ControlClient::onReconnectTick, Qt::UniqueConnection);
+
+    keepaliveTimer_.setInterval(kClientKeepaliveIntervalMs);
+    QObject::connect(&keepaliveTimer_, &QTimer::timeout, this, &ControlClient::onKeepaliveTick, Qt::UniqueConnection);
+    keepaliveTimer_.start();
 }
 
 bool ControlClient::initialize(const std::string &serverIp, quint16 port) {
@@ -39,8 +69,20 @@ bool ControlClient::initialize(const std::string &serverIp, quint16 port) {
     serverPort_ = port;
     discoveryMode_ = false;
     joiningSent_ = false;
+    joined_ = false;
+    helloAcked_ = false;
     controlReadBuffer_.clear();
     pendingControlWrites_.clear();
+    pendingAcks_.clear();
+    desiredTalkTargets_.clear();
+    desiredTalkValid_ = false;
+    desiredReceivePolicy_ = DesiredReceivePolicy{};
+    joinName_.clear();
+    reconnectBackoffMs_ = kReconnectBackoffMinMs;
+    reconnectTimer_.stop();
+    ackTimer_.stop();
+    pendingKeepalivePingId_ = 0;
+    missedKeepalivePings_ = 0;
 
     if (target.isEmpty() || target.compare(QStringLiteral("auto"), Qt::CaseInsensitive) == 0) {
         serverAddress_ = QHostAddress();
@@ -86,10 +128,22 @@ void ControlClient::set_client_label(const QString &name) {
 }
 
 void ControlClient::start() {
+    stopRequested_ = false;
+    keepaliveTimer_.start();
     ensureControlConnected(800);
 }
 
 void ControlClient::stop() {
+    stopRequested_ = true;
+    reconnectTimer_.stop();
+    ackTimer_.stop();
+    keepaliveTimer_.stop();
+    pendingAcks_.clear();
+    helloAcked_ = false;
+    joined_ = false;
+    joiningSent_ = false;
+    pendingKeepalivePingId_ = 0;
+    missedKeepalivePings_ = 0;
     mediaSocket_.close();
     controlSocket_.disconnectFromHost();
     if (controlSocket_.state() != QAbstractSocket::UnconnectedState) {
@@ -131,11 +185,19 @@ bool ControlClient::ensureControlConnected(int timeoutMs) {
     }
 
     if (controlSocket_.state() == QAbstractSocket::ConnectingState) {
-        return controlSocket_.waitForConnected(timeoutMs);
+        const bool connected = controlSocket_.waitForConnected(timeoutMs);
+        if (!connected) {
+            return false;
+        }
+        return controlSocket_.waitForEncrypted(timeoutMs);
     }
 
-    controlSocket_.connectToHost(serverAddress_, serverPort_);
-    return controlSocket_.waitForConnected(timeoutMs);
+    controlSocket_.connectToHostEncrypted(serverAddress_.toString(), serverPort_);
+    const bool connected = controlSocket_.waitForConnected(timeoutMs);
+    if (!connected) {
+        return false;
+    }
+    return controlSocket_.waitForEncrypted(timeoutMs);
 }
 
 bool ControlClient::ping_server(int timeoutMs) {
@@ -174,27 +236,42 @@ bool ControlClient::ping_server(int timeoutMs) {
 
 void ControlClient::join(uint32_t ssrc, const std::string &name) {
     localSsrc_ = ssrc;
+    joinName_ = QString::fromStdString(name);
+    joined_ = false;
     QJsonObject request;
     request.insert(QStringLiteral("type"), QStringLiteral("join"));
     request.insert(QStringLiteral("ssrc"), static_cast<double>(ssrc));
-    request.insert(QStringLiteral("name"), QString::fromStdString(name));
+    request.insert(QStringLiteral("name"), joinName_);
     request.insert(QStringLiteral("udp_port"), static_cast<int>(mediaSocket_.localPort()));
-    sendPacket(request);
+    if (!helloAcked_) {
+        joiningSent_ = false;
+        return;
+    }
+    sendActionWithAck(ControlAction::Join, request);
     joiningSent_ = true;
 }
 
 void ControlClient::leave(uint32_t ssrc) {
-    if (localSsrc_ == ssrc) {
-        localSsrc_ = 0;
-        joiningSent_ = false;
-    }
+    desiredTalkTargets_.clear();
+    desiredTalkValid_ = false;
+    desiredReceivePolicy_ = DesiredReceivePolicy{};
+
     QJsonObject request;
     request.insert(QStringLiteral("type"), QStringLiteral("leave"));
-    request.insert(QStringLiteral("ssrc"), static_cast<double>(ssrc));
-    sendPacket(request);
+    const uint32_t effectiveSsrc = (localSsrc_ != 0) ? localSsrc_ : ssrc;
+    request.insert(QStringLiteral("ssrc"), static_cast<double>(effectiveSsrc));
+    if (helloAcked_ && joined_) {
+        sendActionWithAck(ControlAction::Leave, request);
+    }
 }
 
 void ControlClient::talk(uint32_t ssrc, const std::vector<uint32_t> &targets) {
+    desiredTalkTargets_ = targets;
+    desiredTalkValid_ = true;
+    if (!joined_ || !helloAcked_) {
+        return;
+    }
+
     QJsonArray targetArray;
     for (uint32_t t : targets) {
         targetArray.push_back(static_cast<double>(t));
@@ -202,12 +279,22 @@ void ControlClient::talk(uint32_t ssrc, const std::vector<uint32_t> &targets) {
 
     QJsonObject request;
     request.insert(QStringLiteral("type"), QStringLiteral("talk"));
-    request.insert(QStringLiteral("ssrc"), static_cast<double>(ssrc));
+    const uint32_t effectiveSsrc = (localSsrc_ != 0) ? localSsrc_ : ssrc;
+    request.insert(QStringLiteral("ssrc"), static_cast<double>(effectiveSsrc));
     request.insert(QStringLiteral("targets"), targetArray);
-    sendPacket(request);
+    sendActionWithAck(ControlAction::Talk, request);
 }
 
 void ControlClient::set_receive_policy(uint32_t ssrc, const std::vector<uint32_t> &sources, int maxStreams, bool filterEnabled, const QString &preferredLayer) {
+    desiredReceivePolicy_.sources = sources;
+    desiredReceivePolicy_.maxStreams = std::clamp(maxStreams, 1, 16);
+    desiredReceivePolicy_.filterEnabled = filterEnabled;
+    desiredReceivePolicy_.preferredLayer = preferredLayer;
+    desiredReceivePolicy_.valid = true;
+    if (!joined_ || !helloAcked_) {
+        return;
+    }
+
     QJsonArray sourceArray;
     for (uint32_t src : sources) {
         sourceArray.push_back(static_cast<double>(src));
@@ -215,16 +302,18 @@ void ControlClient::set_receive_policy(uint32_t ssrc, const std::vector<uint32_t
 
     QJsonObject request;
     request.insert(QStringLiteral("type"), QStringLiteral("subscribe"));
-    request.insert(QStringLiteral("ssrc"), static_cast<double>(ssrc));
+    const uint32_t effectiveSsrc = (localSsrc_ != 0) ? localSsrc_ : ssrc;
+    request.insert(QStringLiteral("ssrc"), static_cast<double>(effectiveSsrc));
     request.insert(QStringLiteral("sources"), sourceArray);
-    request.insert(QStringLiteral("max_streams"), std::clamp(maxStreams, 1, 16));
+    request.insert(QStringLiteral("max_streams"), desiredReceivePolicy_.maxStreams);
     request.insert(QStringLiteral("filter_enabled"), filterEnabled);
     request.insert(QStringLiteral("preferred_layer"), preferredLayer);
-    sendPacket(request);
+    sendActionWithAck(ControlAction::Subscribe, request);
 }
 
 void ControlClient::send_voice(uint32_t ssrc, const QByteArray &pcm16le) {
-    if (pcm16le.isEmpty() || serverAddress_.isNull() || serverPort_ == 0) {
+    const uint32_t effectiveSsrc = (localSsrc_ != 0) ? localSsrc_ : ssrc;
+    if (!joined_ || effectiveSsrc == 0 || pcm16le.isEmpty() || serverAddress_.isNull() || serverPort_ == 0) {
         return;
     }
 
@@ -232,7 +321,7 @@ void ControlClient::send_voice(uint32_t ssrc, const QByteArray &pcm16le) {
 
     QByteArray lowPayload;
     ctrlproto::VoicePacket lowPacket;
-    lowPacket.ssrc = ssrc;
+    lowPacket.ssrc = effectiveSsrc;
     lowPacket.sequence = nextVoiceSeqLow_++;
     lowPacket.timestampMs = ts;
     lowPacket.flags = ctrlproto::voice_flags_with_layer(ctrlproto::kVoiceFlagOpus, ctrlproto::kVoiceLayerLow);
@@ -243,7 +332,7 @@ void ControlClient::send_voice(uint32_t ssrc, const QByteArray &pcm16le) {
 
     QByteArray highPayload;
     ctrlproto::VoicePacket highPacket;
-    highPacket.ssrc = ssrc;
+    highPacket.ssrc = effectiveSsrc;
     highPacket.sequence = nextVoiceSeqHigh_++;
     highPacket.timestampMs = ts;
     highPacket.flags = ctrlproto::voice_flags_with_layer(ctrlproto::kVoiceFlagOpus, ctrlproto::kVoiceLayerHigh);
@@ -294,7 +383,7 @@ void ControlClient::onUdpReadyRead() {
             && sender.protocol() == QAbstractSocket::IPv4Protocol) {
             serverAddress_ = sender;
             if (discoveryMode_ && controlSocket_.state() == QAbstractSocket::UnconnectedState) {
-                controlSocket_.connectToHost(serverAddress_, serverPort_);
+                controlSocket_.connectToHostEncrypted(serverAddress_.toString(), serverPort_);
             }
         }
     }
@@ -320,17 +409,89 @@ void ControlClient::onControlReadyRead() {
         const QJsonObject msg = wire.json;
 
         const QString type = msg.value(QStringLiteral("type")).toString();
+        if (type == QStringLiteral("error")) {
+            const QString reason = msg.value(QStringLiteral("reason")).toString(QStringLiteral("unknown error"));
+            qWarning() << "Control server error:" << reason;
+            if (reason == QStringLiteral("duplicate_ssrc")) {
+                localSsrc_ = QRandomGenerator::global()->generate();
+                if (localSsrc_ == 0) {
+                    localSsrc_ = 1;
+                }
+                joined_ = false;
+                joiningSent_ = false;
+                if (helloAcked_ && controlSocket_.state() == QAbstractSocket::ConnectedState) {
+                    QJsonObject request;
+                    request.insert(QStringLiteral("type"), QStringLiteral("join"));
+                    request.insert(QStringLiteral("ssrc"), static_cast<double>(localSsrc_));
+                    request.insert(QStringLiteral("name"), joinName_);
+                    request.insert(QStringLiteral("udp_port"), static_cast<int>(mediaSocket_.localPort()));
+                    sendActionWithAck(ControlAction::Join, request);
+                    joiningSent_ = true;
+                }
+                continue;
+            }
+            controlSocket_.disconnectFromHost();
+            continue;
+        }
         if (type == QStringLiteral("hello_ack")) {
+            const int protocolVersion = msg.value(QStringLiteral("protocol_version")).toInt(-1);
+            if (protocolVersion != hybridctrl::kProtocolVersion) {
+                qWarning() << "Protocol version mismatch. Client:" << hybridctrl::kProtocolVersion
+                           << "Server:" << protocolVersion;
+                controlSocket_.disconnectFromHost();
+                continue;
+            }
             assignedClientId_ = static_cast<uint32_t>(msg.value(QStringLiteral("client_id")).toDouble(0));
+            mediaSessionKeyRaw_ = QByteArray::fromBase64(msg.value(QStringLiteral("media_session_key")).toString().toUtf8());
+            helloAcked_ = true;
+            reconnectBackoffMs_ = kReconnectBackoffMinMs;
+            if (localSsrc_ != 0) {
+                QJsonObject request;
+                request.insert(QStringLiteral("type"), QStringLiteral("join"));
+                request.insert(QStringLiteral("ssrc"), static_cast<double>(localSsrc_));
+                request.insert(QStringLiteral("name"), joinName_);
+                request.insert(QStringLiteral("udp_port"), static_cast<int>(mediaSocket_.localPort()));
+                sendActionWithAck(ControlAction::Join, request);
+                joiningSent_ = true;
+            }
+            continue;
+        }
+        if (type == QStringLiteral("ping")) {
+            QJsonObject reply;
+            reply.insert(QStringLiteral("type"), QStringLiteral("pong"));
+            reply.insert(QStringLiteral("ping_id"), msg.value(QStringLiteral("ping_id")).toDouble(0));
+            sendPacket(reply);
             continue;
         }
         if (type == QStringLiteral("pong")) {
             const quint64 pingId = static_cast<quint64>(msg.value(QStringLiteral("ping_id")).toDouble(0));
+            if (pendingKeepalivePingId_ != 0 && pingId == pendingKeepalivePingId_) {
+                pendingKeepalivePingId_ = 0;
+                missedKeepalivePings_ = 0;
+            }
             emit pongReceived(pingId);
             continue;
         }
+        if (type == QStringLiteral("join_ack")) {
+            handleAck(ControlAction::Join, msg);
+            continue;
+        }
+        if (type == QStringLiteral("leave_ack")) {
+            handleAck(ControlAction::Leave, msg);
+            continue;
+        }
+        if (type == QStringLiteral("talk_ack")) {
+            handleAck(ControlAction::Talk, msg);
+            continue;
+        }
+        if (type == QStringLiteral("subscribe_ack")) {
+            handleAck(ControlAction::Subscribe, msg);
+            continue;
+        }
         if (type == QStringLiteral("users") && userListCallback_) {
-            userListCallback_(ctrlproto::users_from_json(msg.value(QStringLiteral("users")).toArray()));
+            const std::vector<CtrlUserInfo> users = ctrlproto::users_from_json(msg.value(QStringLiteral("users")).toArray());
+            pruneVoiceStateForUsers(users);
+            userListCallback_(users);
             continue;
         }
         if (type == QStringLiteral("voice_feedback")) {
@@ -345,6 +506,15 @@ void ControlClient::onControlReadyRead() {
 }
 
 void ControlClient::onControlConnected() {
+    reconnectTimer_.stop();
+    reconnectBackoffMs_ = kReconnectBackoffMinMs;
+    helloAcked_ = false;
+    joined_ = false;
+    joiningSent_ = false;
+    pendingKeepalivePingId_ = 0;
+    missedKeepalivePings_ = 0;
+    keepaliveTimer_.start();
+
     if (discoveryMode_) {
         discoveryMode_ = false;
     }
@@ -352,7 +522,7 @@ void ControlClient::onControlConnected() {
     hello.insert(QStringLiteral("type"), QStringLiteral("hello"));
     hello.insert(QStringLiteral("name"), clientLabel_);
     hello.insert(QStringLiteral("udp_port"), static_cast<int>(mediaSocket_.localPort()));
-    hello.insert(QStringLiteral("protocol_version"), 2);
+    hello.insert(QStringLiteral("protocol_version"), hybridctrl::kProtocolVersion);
     QByteArray helloPayload = controlwire::encode(
         hello,
 #if defined(NOX_HAS_PROTOBUF_CONTROL)
@@ -365,19 +535,22 @@ void ControlClient::onControlConnected() {
     controlSocket_.write(helloPayload);
 
     flushPendingControlWrites();
-
-    if (localSsrc_ != 0 && !joiningSent_) {
-        QJsonObject request;
-        request.insert(QStringLiteral("type"), QStringLiteral("join"));
-        request.insert(QStringLiteral("ssrc"), static_cast<double>(localSsrc_));
-        request.insert(QStringLiteral("udp_port"), static_cast<int>(mediaSocket_.localPort()));
-        sendPacket(request);
-        joiningSent_ = true;
-    }
 }
 
 void ControlClient::onControlDisconnected() {
+    helloAcked_ = false;
+    joined_ = false;
     joiningSent_ = false;
+    pendingAcks_.clear();
+    ackTimer_.stop();
+    pendingKeepalivePingId_ = 0;
+    missedKeepalivePings_ = 0;
+
+    if (!stopRequested_) {
+        reconnectTimer_.start(reconnectBackoffMs_);
+        reconnectBackoffMs_ = std::min(reconnectBackoffMs_ * 2, kReconnectBackoffMaxMs);
+        keepaliveTimer_.start();
+    }
 }
 
 void ControlClient::handleIncomingVoice(const ctrlproto::VoicePacket &packet) {
@@ -607,4 +780,149 @@ void ControlClient::sendPacket(const QJsonObject &obj) {
 
     pendingControlWrites_.push_back(payload);
     ensureControlConnected(800);
+}
+
+void ControlClient::sendActionWithAck(ControlAction action, const QJsonObject &payload) {
+    sendPacket(payload);
+    PendingAck pending;
+    pending.action = action;
+    pending.payload = payload;
+    pending.deadlineMs = QDateTime::currentMSecsSinceEpoch() + kAckTimeoutMs;
+    pending.retriesLeft = kAckMaxRetries;
+    pendingAcks_.insert(static_cast<int>(action), pending);
+    if (!ackTimer_.isActive()) {
+        ackTimer_.start();
+    }
+}
+
+void ControlClient::handleAck(ControlAction action, const QJsonObject &msg) {
+    pendingAcks_.remove(static_cast<int>(action));
+    if (pendingAcks_.isEmpty()) {
+        ackTimer_.stop();
+    }
+
+    const bool ok = msg.value(QStringLiteral("ok")).toBool(true);
+    if (action == ControlAction::Join) {
+        joined_ = ok;
+        if (ok) {
+            trySendDeferredActions();
+        } else {
+            joiningSent_ = false;
+        }
+        return;
+    }
+
+    if (action == ControlAction::Leave && ok) {
+        joined_ = false;
+        joiningSent_ = false;
+    }
+}
+
+void ControlClient::onAckTick() {
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    for (auto it = pendingAcks_.begin(); it != pendingAcks_.end();) {
+        if (nowMs <= it->deadlineMs) {
+            ++it;
+            continue;
+        }
+
+        if (it->retriesLeft > 0) {
+            sendPacket(it->payload);
+            it->retriesLeft -= 1;
+            it->deadlineMs = nowMs + kAckTimeoutMs;
+            ++it;
+            continue;
+        }
+
+        const ControlAction action = it->action;
+        it = pendingAcks_.erase(it);
+        if (action == ControlAction::Join) {
+            joined_ = false;
+            joiningSent_ = false;
+            if (!stopRequested_) {
+                controlSocket_.disconnectFromHost();
+            }
+        }
+    }
+
+    if (pendingAcks_.isEmpty()) {
+        ackTimer_.stop();
+    }
+}
+
+void ControlClient::onReconnectTick() {
+    if (stopRequested_) {
+        return;
+    }
+
+    if (controlSocket_.state() == QAbstractSocket::ConnectedState
+        || controlSocket_.state() == QAbstractSocket::ConnectingState) {
+        return;
+    }
+
+    if (!ensureControlConnected(500)) {
+        reconnectTimer_.start(reconnectBackoffMs_);
+        reconnectBackoffMs_ = std::min(reconnectBackoffMs_ * 2, kReconnectBackoffMaxMs);
+    }
+}
+
+void ControlClient::onKeepaliveTick() {
+    if (stopRequested_) {
+        return;
+    }
+    if (controlSocket_.state() != QAbstractSocket::ConnectedState) {
+        return;
+    }
+
+    if (pendingKeepalivePingId_ != 0) {
+        ++missedKeepalivePings_;
+        if (missedKeepalivePings_ >= kClientKeepaliveMissLimit) {
+            qWarning() << "Client keepalive timeout; reconnecting control socket";
+            controlSocket_.disconnectFromHost();
+            return;
+        }
+    }
+
+    const quint64 pingId = nextPingId_++;
+    pendingKeepalivePingId_ = pingId;
+    QJsonObject request;
+    request.insert(QStringLiteral("type"), QStringLiteral("ping"));
+    request.insert(QStringLiteral("ping_id"), static_cast<double>(pingId));
+    sendPacket(request);
+}
+
+void ControlClient::trySendDeferredActions() {
+    if (!joined_ || !helloAcked_) {
+        return;
+    }
+
+    if (desiredTalkValid_) {
+        talk(localSsrc_, desiredTalkTargets_);
+    }
+    if (desiredReceivePolicy_.valid) {
+        set_receive_policy(localSsrc_,
+                           desiredReceivePolicy_.sources,
+                           desiredReceivePolicy_.maxStreams,
+                           desiredReceivePolicy_.filterEnabled,
+                           desiredReceivePolicy_.preferredLayer);
+    }
+}
+
+void ControlClient::pruneVoiceStateForUsers(const std::vector<CtrlUserInfo> &users) {
+    QSet<uint32_t> activeRemoteSsrcs;
+    for (const CtrlUserInfo &user : users) {
+        if (user.online == 0 || user.ssrc == 0 || user.ssrc == localSsrc_) {
+            continue;
+        }
+        activeRemoteSsrcs.insert(user.ssrc);
+    }
+
+    for (auto it = jitterBySsrc_.begin(); it != jitterBySsrc_.end();) {
+        if (!activeRemoteSsrcs.contains(it.key())) {
+            it = jitterBySsrc_.erase(it);
+            continue;
+        }
+        ++it;
+    }
+    opusCodec_.retainDecoders(activeRemoteSsrcs);
 }

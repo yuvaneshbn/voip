@@ -1,14 +1,16 @@
 #include "OpusCodec.h"
 
+#include "constants.h"
+
 #include <opus.h>
 
 #include <algorithm>
 #include <array>
 
 namespace {
-constexpr int kSampleRate = 48000;
+constexpr int kSampleRate = SAMPLE_RATE;
 constexpr int kChannels = 1;
-constexpr int kFrameMs = 20;
+constexpr int kFrameMs = AUDIO_FRAME_MS;
 constexpr int kFrameSamples = (kSampleRate * kFrameMs) / 1000; // 960
 constexpr int kFrameBytes = kFrameSamples * kChannels * static_cast<int>(sizeof(opus_int16)); // 1920
 constexpr int kMaxOpusPacketBytes = 512;
@@ -175,6 +177,30 @@ bool OpusCodec::setBitrate(int bps, int expectedLossPct) {
     const int rc3 = opus_encoder_ctl(encoderLow_, OPUS_SET_BITRATE(lowBitrate));
     const int rc4 = opus_encoder_ctl(encoderLow_, OPUS_SET_PACKET_LOSS_PERC(std::min(loss + 8, 40)));
     return rc1 == OPUS_OK && rc2 == OPUS_OK && rc3 == OPUS_OK && rc4 == OPUS_OK;
+}
+
+void OpusCodec::removeDecoder(uint32_t ssrc) {
+    auto it = decoders_.find(ssrc);
+    if (it == decoders_.end()) {
+        return;
+    }
+    if (it.value()) {
+        opus_decoder_destroy(it.value());
+    }
+    decoders_.erase(it);
+}
+
+void OpusCodec::retainDecoders(const QSet<uint32_t> &activeSsrcs) {
+    for (auto it = decoders_.begin(); it != decoders_.end();) {
+        if (!activeSsrcs.contains(it.key())) {
+            if (it.value()) {
+                opus_decoder_destroy(it.value());
+            }
+            it = decoders_.erase(it);
+            continue;
+        }
+        ++it;
+    }
 }
 
 OpusDecoder *OpusCodec::ensureDecoder(uint32_t ssrc) {

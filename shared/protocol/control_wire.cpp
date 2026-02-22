@@ -264,4 +264,3 @@ bool decode(const QByteArray &line, ControlWireMessage &out) {
 }
 
 } // namespace controlwire
-

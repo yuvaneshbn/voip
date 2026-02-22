@@ -89,13 +89,15 @@ MainWindow::MainWindow(const QString& serverIp,
     connect(ui->sliderMic, &QSlider::valueChanged, this, [this](int value) {
         ui->lblMicValue->setText(QString::number(value) + "%");
         if (audio_) {
-            audio_->setInputGain(static_cast<float>(value) / 100.0f);
+            const float gain = static_cast<float>(value) / 100.0f;
+            invokeOnAudioThread([this, gain]() { audio_->setInputGain(gain); });
         }
     });
     connect(ui->sliderSpeaker, &QSlider::valueChanged, this, [this](int value) {
         ui->lblSpeakerValue->setText(QString::number(value) + "%");
         if (audio_) {
-            audio_->setOutputGain(static_cast<float>(value) / 100.0f);
+            const float gain = static_cast<float>(value) / 100.0f;
+            invokeOnAudioThread([this, gain]() { audio_->setOutputGain(gain); });
         }
     });
 
@@ -103,45 +105,73 @@ MainWindow::MainWindow(const QString& serverIp,
         std::chrono::high_resolution_clock::now().time_since_epoch().count());
 
     control_ = std::make_unique<ControlClient>();
-    control_->set_client_label(clientName_);
-    if (!control_->initialize(serverIp_.toStdString(), DEFAULT_CONTROL_PORT)) {
+    controlThread_ = std::make_unique<QThread>(this);
+    control_->moveToThread(controlThread_.get());
+    controlThread_->start();
+
+    bool controlInitialized = false;
+    QMetaObject::invokeMethod(control_.get(), [this, &controlInitialized]() {
+        control_->set_client_label(clientName_);
+        controlInitialized = control_->initialize(serverIp_.toStdString(), DEFAULT_CONTROL_PORT);
+    }, Qt::BlockingQueuedConnection);
+
+    if (!controlInitialized) {
         statusBar()->showMessage("Failed to initialize control client");
     } else {
-        control_->set_user_list_callback([this](const std::vector<CtrlUserInfo>& users) {
-            QMetaObject::invokeMethod(this, [this, users]() {
-                rebuildClientsFromControl(users);
-                refreshClientList();
-                updateStats();
-                updateGroupButtonState();
-                updateCallStage();
-            }, Qt::QueuedConnection);
-        });
+        QMetaObject::invokeMethod(control_.get(), [this]() {
+            control_->set_user_list_callback([this](const std::vector<CtrlUserInfo>& users) {
+                QMetaObject::invokeMethod(this, [this, users]() {
+                    rebuildClientsFromControl(users);
+                    refreshClientList();
+                    updateStats();
+                    updateGroupButtonState();
+                    updateCallStage();
+                }, Qt::QueuedConnection);
+            });
 
-        control_->set_voice_callback([this](uint32_t fromSsrc, const QByteArray &pcm) {
-            QMetaObject::invokeMethod(this, [this, fromSsrc, pcm]() {
-                if (audio_ && acceptsVoiceFrom(fromSsrc)) {
-                    audio_->playIncoming(pcm);
-                }
-            }, Qt::QueuedConnection);
-        });
+            control_->set_voice_callback([this](uint32_t fromSsrc, const QByteArray &pcm) {
+                QMetaObject::invokeMethod(this, [this, fromSsrc, pcm]() {
+                    if (audio_ && acceptsVoiceFrom(fromSsrc)) {
+                        invokeOnAudioThread([this, pcm]() { audio_->playIncoming(pcm); });
+                    }
+                }, Qt::QueuedConnection);
+            });
 
-        control_->start();
-        control_->join(localSsrc_, clientName_.toStdString());
-        control_->talk(localSsrc_, {});
-        control_->set_receive_policy(localSsrc_, {}, 4, false, preferredLayer_);
-        control_->request_user_list();
+            control_->start();
+            control_->join(localSsrc_, clientName_.toStdString());
+            control_->talk(localSsrc_, {});
+            control_->set_receive_policy(localSsrc_, {}, 4, false, preferredLayer_);
+            control_->request_user_list();
+        }, Qt::BlockingQueuedConnection);
         serverConnected_ = true;
     }
 
-    audio_ = std::make_unique<AudioEngine>(this);
-    audio_->setInputGain(static_cast<float>(ui->sliderMic->value()) / 100.0f);
-    audio_->setOutputGain(static_cast<float>(ui->sliderSpeaker->value()) / 100.0f);
-    audio_->setOutgoingVoiceCallback([this](const QByteArray &pcm) {
-        if (control_ && localSsrc_ != 0) {
-            control_->send_voice(localSsrc_, pcm);
-        }
-    });
-    if (!audio_->start()) {
+    audio_ = std::make_unique<AudioEngine>();
+    audioThread_ = std::make_unique<QThread>(this);
+    audio_->moveToThread(audioThread_.get());
+    QObject::connect(audio_.get(), &AudioEngine::captureActiveChanged, this, [this](bool active) {
+        audioCaptureActive_ = active;
+        updateAudioControls();
+    }, Qt::QueuedConnection);
+    audioThread_->start();
+
+    const float initialInputGain = static_cast<float>(ui->sliderMic->value()) / 100.0f;
+    const float initialOutputGain = static_cast<float>(ui->sliderSpeaker->value()) / 100.0f;
+    bool audioStarted = false;
+    QMetaObject::invokeMethod(audio_.get(), [this, initialInputGain, initialOutputGain, &audioStarted]() {
+        audio_->setInputGain(initialInputGain);
+        audio_->setOutputGain(initialOutputGain);
+        audio_->setOutgoingVoiceCallback([this](const QByteArray &pcm) {
+            QMetaObject::invokeMethod(this, [this, pcm]() {
+                if (control_ && localSsrc_ != 0) {
+                    invokeOnControlThread([this, pcm]() { control_->send_voice(localSsrc_, pcm); });
+                }
+            }, Qt::QueuedConnection);
+        });
+        audioStarted = audio_->start();
+    }, Qt::BlockingQueuedConnection);
+
+    if (!audioStarted) {
         statusBar()->showMessage("Audio device init failed (check mic/speaker permissions/devices)", 5000);
     }
 
@@ -186,13 +216,34 @@ MainWindow::MainWindow(const QString& serverIp,
 
 MainWindow::~MainWindow() {
     if (audio_) {
-        audio_->stop();
+        if (audioThread_ && audioThread_->isRunning()) {
+            QMetaObject::invokeMethod(audio_.get(), [this]() { audio_->stop(); }, Qt::BlockingQueuedConnection);
+            audioThread_->quit();
+            audioThread_->wait(3000);
+        } else {
+            audio_->stop();
+        }
+        audio_.reset();
+        audioThread_.reset();
     }
     if (control_) {
-        if (localSsrc_ != 0) {
-            control_->leave(localSsrc_);
+        if (controlThread_ && controlThread_->isRunning()) {
+            QMetaObject::invokeMethod(control_.get(), [this]() {
+                if (localSsrc_ != 0) {
+                    control_->leave(localSsrc_);
+                }
+                control_->stop();
+            }, Qt::BlockingQueuedConnection);
+            controlThread_->quit();
+            controlThread_->wait(3000);
+        } else {
+            if (localSsrc_ != 0) {
+                control_->leave(localSsrc_);
+            }
+            control_->stop();
         }
-        control_->stop();
+        control_.reset();
+        controlThread_.reset();
     }
     delete ui;
 }
@@ -423,10 +474,13 @@ void MainWindow::applyOccupiedTargets(const QVector<Client>& selectedOnline) {
         participants_.push_back(c.name);
     }
 
-    control_->talk(localSsrc_, targets);
+    invokeOnControlThread([this, targets]() { control_->talk(localSsrc_, targets); });
     if (audio_) {
-        audio_->setMuted(isMuted_);
-        audio_->setTransmitEnabled(!isMuted_);
+        const bool muted = isMuted_;
+        invokeOnAudioThread([this, muted]() {
+            audio_->setMuted(muted);
+            audio_->setTransmitEnabled(!muted);
+        });
     }
 
     callType_ = QStringLiteral("talk");
@@ -479,10 +533,13 @@ void MainWindow::startBroadcastFromStage() {
     }
 
     occupiedTargets_.clear();
-    control_->talk(localSsrc_, {});
+    invokeOnControlThread([this]() { control_->talk(localSsrc_, {}); });
     if (audio_) {
-        audio_->setMuted(isMuted_);
-        audio_->setTransmitEnabled(false);
+        const bool muted = isMuted_;
+        invokeOnAudioThread([this, muted]() {
+            audio_->setMuted(muted);
+            audio_->setTransmitEnabled(false);
+        });
     }
 
     callType_ = QStringLiteral("broadcast");
@@ -514,7 +571,7 @@ void MainWindow::startBroadcastFromStage() {
 
 void MainWindow::endCall() {
     if (control_) {
-        control_->talk(localSsrc_, {});
+        invokeOnControlThread([this]() { control_->talk(localSsrc_, {}); });
     }
 
     occupiedTargets_.clear();
@@ -542,8 +599,11 @@ void MainWindow::startPushToTalk() {
 
     isPushToTalkPressed_ = true;
     if (audio_) {
-        audio_->setMuted(isMuted_);
-        audio_->setTransmitEnabled(!isMuted_);
+        const bool muted = isMuted_;
+        invokeOnAudioThread([this, muted]() {
+            audio_->setMuted(muted);
+            audio_->setTransmitEnabled(!muted);
+        });
     }
     statusBar()->showMessage("Speaking to broadcast targets", 1000);
     updateCallStage();
@@ -557,7 +617,7 @@ void MainWindow::stopPushToTalk() {
 
     isPushToTalkPressed_ = false;
     if (audio_) {
-        audio_->setTransmitEnabled(false);
+        invokeOnAudioThread([this]() { audio_->setTransmitEnabled(false); });
     }
     statusBar()->showMessage("Stopped speaking", 1000);
     updateCallStage();
@@ -567,7 +627,8 @@ void MainWindow::stopPushToTalk() {
 void MainWindow::onMuteToggled(bool checked) {
     isMuted_ = !checked;
     if (audio_) {
-        audio_->setMuted(isMuted_);
+        const bool muted = isMuted_;
+        invokeOnAudioThread([this, muted]() { audio_->setMuted(muted); });
     }
     updateHeader();
     updateAudioControls();
@@ -578,7 +639,7 @@ void MainWindow::onSelectiveHearingToggled(bool checked) {
     if (!selectiveHearingEnabled_) {
         hearingTargets_.clear();
         if (control_) {
-            control_->set_receive_policy(localSsrc_, {}, 4, false, preferredLayer_);
+            invokeOnControlThread([this]() { control_->set_receive_policy(localSsrc_, {}, 4, false, preferredLayer_); });
         }
     } else {
         applySelectiveHearingFromSelection();
@@ -602,7 +663,7 @@ void MainWindow::applySelectiveHearingFromSelection() {
             for (uint32_t ssrc : hearingTargets_) {
                 subs.push_back(ssrc);
             }
-            control_->set_receive_policy(localSsrc_, subs, 4, true, preferredLayer_);
+            invokeOnControlThread([this, subs]() { control_->set_receive_policy(localSsrc_, subs, 4, true, preferredLayer_); });
         }
         if (hearingTargets_.isEmpty()) {
             statusBar()->showMessage("Selective hearing enabled: no users selected", 2500);
@@ -634,7 +695,9 @@ void MainWindow::onLayerPreferenceChanged(int index) {
             subs.push_back(ssrc);
         }
     }
-    control_->set_receive_policy(localSsrc_, subs, 4, selectiveHearingEnabled_, preferredLayer_);
+    invokeOnControlThread([this, subs]() {
+        control_->set_receive_policy(localSsrc_, subs, 4, selectiveHearingEnabled_, preferredLayer_);
+    });
 }
 
 void MainWindow::pollServerStatus() {
@@ -649,13 +712,16 @@ void MainWindow::pollServerStatus() {
     }
 
     auto t0 = std::chrono::steady_clock::now();
-    const bool ok = control_->ping_server(300);
+    bool ok = false;
+    QMetaObject::invokeMethod(control_.get(), [this, &ok]() {
+        ok = control_->ping_server(300);
+    }, Qt::BlockingQueuedConnection);
     auto t1 = std::chrono::steady_clock::now();
 
     const int pingMs = static_cast<int>(
         std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
     if (ok) {
-        control_->update_rtt_estimate(pingMs);
+        invokeOnControlThread([this, pingMs]() { control_->update_rtt_estimate(pingMs); });
     }
     updateNetworkQualityFromPing(ok, pingMs);
     updateHeader();
@@ -663,7 +729,7 @@ void MainWindow::pollServerStatus() {
 
 void MainWindow::refreshUserList() {
     if (control_ && serverConnected_) {
-        control_->request_user_list();
+        invokeOnControlThread([this]() { control_->request_user_list(); });
     }
 }
 
@@ -806,10 +872,13 @@ void MainWindow::updateAudioControls() {
 
     if (audio_) {
         const bool txEnabled = inCall && (!broadcast || isPushToTalkPressed_);
-        audio_->setMuted(isMuted_);
-        audio_->setTransmitEnabled(txEnabled);
+        const bool muted = isMuted_;
+        invokeOnAudioThread([this, muted, txEnabled]() {
+            audio_->setMuted(muted);
+            audio_->setTransmitEnabled(txEnabled);
+        });
 
-        if (txEnabled && !isMuted_ && !audio_->isCaptureActive()) {
+        if (txEnabled && !isMuted_ && !audioCaptureActive_) {
             ui->lblMicActivity->setText("Mic Error");
         } else {
             ui->lblMicActivity->setText((txEnabled && !isMuted_) ? "Mic Active" : "Mic Idle");
@@ -837,5 +906,19 @@ bool MainWindow::acceptsVoiceFrom(uint32_t ssrc) const {
         return true;
     }
     return hearingTargets_.contains(ssrc);
+}
+
+void MainWindow::invokeOnAudioThread(const std::function<void()> &fn) const {
+    if (!audio_) {
+        return;
+    }
+    QMetaObject::invokeMethod(audio_.get(), [fn]() { fn(); }, Qt::QueuedConnection);
+}
+
+void MainWindow::invokeOnControlThread(const std::function<void()> &fn) const {
+    if (!control_) {
+        return;
+    }
+    QMetaObject::invokeMethod(control_.get(), [fn]() { fn(); }, Qt::QueuedConnection);
 }
 

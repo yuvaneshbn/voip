@@ -19,6 +19,7 @@ struct HelloRequest {
 struct HelloAck {
     uint32_t clientId = 0;
     int protocolVersion = kProtocolVersion;
+    QString mediaSessionKeyB64;
 };
 
 struct JoinRoom {
@@ -78,6 +79,9 @@ inline QJsonObject to_json(const HelloAck &m) {
     o.insert(QStringLiteral("type"), QStringLiteral("hello_ack"));
     o.insert(QStringLiteral("client_id"), static_cast<double>(m.clientId));
     o.insert(QStringLiteral("protocol_version"), m.protocolVersion);
+    if (!m.mediaSessionKeyB64.isEmpty()) {
+        o.insert(QStringLiteral("media_session_key"), m.mediaSessionKeyB64);
+    }
     return o;
 }
 
@@ -117,4 +121,3 @@ inline QJsonObject to_json(const Subscribe &m) {
 }
 
 } // namespace hybridctrl
-

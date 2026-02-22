@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-uint32_t ClientRegistry::assignOrReuseId(QTcpSocket *socket) {
+uint32_t ClientRegistry::assignOrReuseId(QSslSocket *socket) {
     if (!socket) {
         return 0;
     }
@@ -18,7 +18,7 @@ uint32_t ClientRegistry::assignOrReuseId(QTcpSocket *socket) {
 }
 
 void ClientRegistry::updateJoin(uint32_t clientId, const QString &name, const QString &room,
-                                const QHostAddress &addr, quint16 mediaPort, QTcpSocket *socket, qint64 nowMs) {
+                                const QHostAddress &addr, quint16 mediaPort, QSslSocket *socket, qint64 nowMs) {
     if (clientId == 0) {
         return;
     }
@@ -36,7 +36,7 @@ void ClientRegistry::updateJoin(uint32_t clientId, const QString &name, const QS
     }
 }
 
-void ClientRegistry::markOfflineBySocket(QTcpSocket *socket) {
+void ClientRegistry::markOfflineBySocket(QSslSocket *socket) {
     auto it = socketToId_.find(socket);
     if (it == socketToId_.end()) {
         return;
@@ -96,7 +96,7 @@ const ClientRegistry::ClientState *ClientRegistry::find(uint32_t clientId) const
     return (it == byId_.end()) ? nullptr : &it.value();
 }
 
-ClientRegistry::ClientState *ClientRegistry::findBySocket(QTcpSocket *socket) {
+ClientRegistry::ClientState *ClientRegistry::findBySocket(QSslSocket *socket) {
     auto sid = socketToId_.find(socket);
     if (sid == socketToId_.end()) {
         return nullptr;
@@ -114,4 +114,3 @@ QVector<ClientRegistry::ClientState> ClientRegistry::onlineClients() const {
     }
     return out;
 }
-

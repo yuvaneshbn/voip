@@ -14,6 +14,7 @@ QT_BEGIN_NAMESPACE
 class QAudioSink;
 class QAudioSource;
 class QIODevice;
+class QMediaDevices;
 QT_END_NAMESPACE
 
 class AudioEngine : public QObject {
@@ -36,9 +37,13 @@ public:
     void setOutgoingVoiceCallback(std::function<void(const QByteArray &)> cb);
     void playIncoming(const QByteArray &pcm16le);
 
+signals:
+    void captureActiveChanged(bool active);
+
 private slots:
     void onCaptureReadyRead();
     void flushPlaybackBuffer();
+    void onAudioDevicesChanged();
 
 private:
     QAudioFormat makeAudioFormat() const;
@@ -52,6 +57,7 @@ private:
     std::unique_ptr<QAudioSink> output_;
     QIODevice *captureDevice_ = nullptr;
     QIODevice *playbackDevice_ = nullptr;
+    std::unique_ptr<QMediaDevices> mediaDevices_;
     QByteArray captureBuffer_;
     QByteArray playbackBuffer_;
     QByteArray lastPlaybackFrame_;
@@ -65,5 +71,6 @@ private:
     float inputGain_ = 1.0f;
     float outputGain_ = 1.0f;
     int frameBytes_ = 0;
+    bool running_ = false;
 };
 

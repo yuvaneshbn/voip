@@ -1,8 +1,10 @@
 #pragma once
 
 #include <QHash>
+#include <QJsonObject>
 #include <QMap>
-#include <QTcpSocket>
+#include <QSet>
+#include <QSslSocket>
 #include <QTimer>
 #include <QUdpSocket>
 #include <QVector>
@@ -45,8 +47,33 @@ private slots:
     void onControlReadyRead();
     void onControlConnected();
     void onControlDisconnected();
+    void onAckTick();
+    void onReconnectTick();
+    void onKeepaliveTick();
 
 private:
+    enum class ControlAction : int {
+        Join = 1,
+        Leave = 2,
+        Talk = 3,
+        Subscribe = 4
+    };
+
+    struct PendingAck {
+        ControlAction action = ControlAction::Join;
+        QJsonObject payload;
+        qint64 deadlineMs = 0;
+        int retriesLeft = 0;
+    };
+
+    struct DesiredReceivePolicy {
+        std::vector<uint32_t> sources;
+        int maxStreams = 4;
+        bool filterEnabled = false;
+        QString preferredLayer = QStringLiteral("auto");
+        bool valid = false;
+    };
+
     struct QueuedVoiceFrame {
         uint8_t flags = 0;
         uint32_t timestampMs = 0;
@@ -82,15 +109,22 @@ private:
     bool ensureControlConnected(int timeoutMs);
     void flushPendingControlWrites();
     void sendPacket(const QJsonObject &obj);
+    void pruneVoiceStateForUsers(const std::vector<CtrlUserInfo> &users);
+    void sendActionWithAck(ControlAction action, const QJsonObject &payload);
+    void handleAck(ControlAction action, const QJsonObject &msg);
+    void trySendDeferredActions();
 
     QUdpSocket mediaSocket_;
-    QTcpSocket controlSocket_;
+    QSslSocket controlSocket_;
     QByteArray controlReadBuffer_;
     QVector<QByteArray> pendingControlWrites_;
     QHostAddress serverAddress_;
     quint16 serverPort_ = 0;
     bool discoveryMode_ = false;
     bool joiningSent_ = false;
+    bool joined_ = false;
+    bool helloAcked_ = false;
+    bool stopRequested_ = false;
     std::function<void(const std::vector<CtrlUserInfo> &)> userListCallback_;
     std::function<void(uint32_t, const QByteArray &)> voiceCallback_;
     quint64 nextPingId_ = 1;
@@ -100,9 +134,21 @@ private:
     OpusCodec opusCodec_;
     QTimer playoutTimer_;
     QTimer feedbackTimer_;
+    QTimer ackTimer_;
+    QTimer reconnectTimer_;
+    QTimer keepaliveTimer_;
     uint32_t localSsrc_ = 0;
     uint32_t assignedClientId_ = 0;
     QString clientLabel_ = QStringLiteral("nox-client");
+    QString joinName_;
+    std::vector<uint32_t> desiredTalkTargets_;
+    bool desiredTalkValid_ = false;
+    DesiredReceivePolicy desiredReceivePolicy_;
+    QHash<int, PendingAck> pendingAcks_;
+    int reconnectBackoffMs_ = 1000;
+    quint64 pendingKeepalivePingId_ = 0;
+    int missedKeepalivePings_ = 0;
+    QByteArray mediaSessionKeyRaw_;
     int rttEstimateMs_ = 80;
     int currentTargetBitrate_ = 32000;
     double feedbackLossEwma_ = 0.0;
