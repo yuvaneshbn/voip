@@ -1,6 +1,6 @@
 # Nox VoIP (LAN UDP)
 
-LAN-based UDP VoIP application built with Qt 6 (C++17), with a control server and desktop client for real-time local network voice communication.
+LAN-based UDP VoIP application built with Qt 6 (C++20), with a control server and desktop client for real-time local network voice communication.
 
 ## 1. What This Project Does
 
@@ -43,21 +43,20 @@ The client includes stabilized network quality logic:
 
 ## 3. Current Build Scope (Important)
 
-The project defines two binaries:
+Primary CMake targets:
 - `voip-server`
 - `voip-client`
 
-Build manifests are configured for full-tree compilation by default:
-- qmake: `CONFIG += include_all_client_sources` and `CONFIG += include_all_server_sources`
-- CMake: `NOX_INCLUDE_LEGACY_CLIENT_SOURCES=ON`, `NOX_INCLUDE_LEGACY_SERVER_SOURCES=ON`
+Additional targets:
+- `nox-asio-server`
+- `nox-asio-client`
+- `nox-control-proto` (generated from `shared/protocol/control.proto`)
+- `opus-portaudio-probe` (only when PortAudio is available locally)
 
-Runtime-only fallback (if needed for quick smoke builds):
-- qmake: remove `include_all_client_sources` / `include_all_server_sources` from `CONFIG`
-- CMake: configure with `-DNOX_MINIMAL_RUNTIME_ONLY=ON`
-
-Automatic safety fallback:
-- CMake can auto-disable full-tree compilation when legacy headers are missing (`NOX_AUTO_DISABLE_FULLTREE_IF_INCOMPLETE=ON`).
-- qmake project files also auto-remove `include_all_*_sources` if required legacy headers are absent.
+Current defaults in `CMakeLists.txt`:
+- `NOX_ENABLE_SPEEXDSP_AEC=ON` (required)
+- `NOX_ENABLE_ASIO_BACKEND=ON` (required)
+- `NOX_ENABLE_PROTOBUF_CONTROL=ON` (required)
 
 ## 4. Repository Structure
 
@@ -100,7 +99,7 @@ Nox/
 
 ## 5. Tech Stack
 
-- C++17
+- C++20
 - Qt 6 modules:
   - `Core`
   - `Gui`
@@ -112,20 +111,29 @@ Nox/
 
 ## 6. Prerequisites
 
-- Qt 6 installed (matching MinGW kit)
+- Windows + MinGW toolchain
 - CMake >= 3.21
-- MinGW compiler toolchain available in PATH
+- Git clone that includes committed `local-deps/` assets
 
-If CMake cannot find Qt automatically, set `Qt6_DIR` (example in `CMakeLists.txt` comments).
+For this repository, Qt is expected under `local-deps/qt6` (headers, runtime DLLs, import libs, and Qt CMake package files). A global Qt installation is optional.
 
-### Local Self-Contained Dependencies (Recommended if Qt modules are missing)
+### Local Self-Contained Dependencies (Offline/Portable Setup)
 
 Use `local-deps/` to keep all SDK/runtime dependencies inside the repo workspace:
 
 ```text
 local-deps/
   qt6/
+    include/
+    bin/
+    lib/
     lib/cmake/Qt6/Qt6Config.cmake
+    lib/cmake/Qt6Core/Qt6CoreConfig.cmake
+    lib/cmake/Qt6Gui/Qt6GuiConfig.cmake
+    lib/cmake/Qt6Widgets/Qt6WidgetsConfig.cmake
+    lib/cmake/Qt6Network/Qt6NetworkConfig.cmake
+    lib/cmake/Qt6Multimedia/Qt6MultimediaConfig.cmake
+    mkspecs/win32-g++/qmake.conf
   opus/
     opus.lib (or lib/opus.lib)
     opus.dll (or bin/opus.dll)
@@ -135,12 +143,12 @@ local-deps/
     include/google/protobuf/message.h
 ```
 
-CMake auto-detects this via `NOX_LOCAL_DEPS_DIR` (default: `./local-deps`).
-If auto-detection fails, pass explicit paths:
+CMake auto-detects dependencies via `NOX_LOCAL_DEPS_DIR` (default: `./local-deps`).
+If needed, pass explicit paths:
 
 ```bash
-cmake -S . -B build-mingw -DNOX_LOCAL_DEPS_DIR=$PWD/local-deps
-cmake -S . -B build-mingw -DQt6_DIR=$PWD/local-deps/qt6/lib/cmake/Qt6
+cmake -S . -B build-mingw -DNOX_LOCAL_DEPS_DIR="$PWD/local-deps"
+cmake -S . -B build-mingw -DQt6_DIR="$PWD/local-deps/qt6/lib/cmake/Qt6"
 ```
 
 Qt Creator / qmake include hygiene:
@@ -157,13 +165,13 @@ cmake -S . -B build-mingw
 
 ### Build
 ```bash
-cmake --build build-mingw -- -j4
+cmake --build build-mingw -j4
 ```
 
 ### Clean + Rebuild
 ```bash
 cmake --build build-mingw --target clean
-cmake --build build-mingw -- -j4
+cmake --build build-mingw -j4
 ```
 
 ### Optional: PortAudio + Opus Probe Target
@@ -278,7 +286,12 @@ Runtime dependencies (Qt + MinGW DLLs) must be present beside binaries (or deplo
 ## 11. Troubleshooting
 
 ### CMake cannot find Qt
-- Set `Qt6_DIR` to your Qt kit's `lib/cmake/Qt6`.
+- Verify `local-deps/qt6/lib/cmake/Qt6/Qt6Config.cmake` exists.
+- Verify required module configs exist (`Qt6Core`, `Qt6Gui`, `Qt6Widgets`, `Qt6Network`, `Qt6Multimedia`).
+- Reconfigure with:
+```bash
+cmake -S . -B build-mingw -DNOX_LOCAL_DEPS_DIR="$PWD/local-deps" -DQt6_DIR="$PWD/local-deps/qt6/lib/cmake/Qt6"
+```
 
 ### Server unreachable from client
 - Verify IP/port (default port in `constants.h`)
@@ -295,7 +308,7 @@ Runtime dependencies (Qt + MinGW DLLs) must be present beside binaries (or deplo
 
 ## 12. Known Limitations
 
-- Full-source compilation can require additional generated files/dependencies for legacy Mumble-style paths.
+- `opus-portaudio-probe` is skipped if PortAudio headers/libs are not present.
 - `windeployqt` output can vary by Qt install/backend availability (for example optional DirectX compiler DLL warnings).
 
 ## 13. License / Third-Party
@@ -313,7 +326,7 @@ cmake -S . -B build-mingw
 ```
 3. Build incrementally:
 ```bash
-cmake --build build-mingw -- -j4
+cmake --build build-mingw -j4
 ```
 4. Run server + client locally:
 ```powershell
@@ -352,7 +365,7 @@ Use this when call quality or status behavior looks wrong.
 1. Clean rebuild:
 ```bash
 cmake --build build-mingw --target clean
-cmake --build build-mingw -- -j4
+cmake --build build-mingw -j4
 ```
 2. Confirm generated binaries:
 - `build-mingw/voip-server.exe`
@@ -367,7 +380,7 @@ cmake --build build-mingw -- -j4
 For automation scripts:
 ```bash
 cmake -S . -B build-mingw
-cmake --build build-mingw -- -j4
+cmake --build build-mingw -j4
 ```
 Optional runtime smoke check:
 ```powershell
