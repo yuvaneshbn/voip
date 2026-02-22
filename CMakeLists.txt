@@ -331,6 +331,10 @@ if(NOX_ENABLE_PROTOBUF_CONTROL)
 endif()
 
 option(NOX_BUILD_PORTAUDIO_PROBE "Build PortAudio + Opus pipeline probe app" ON)
+set(NOX_BUILD_PORTAUDIO_PROBE ON CACHE BOOL "Build PortAudio + Opus pipeline probe app" FORCE)
+if(NOT NOX_BUILD_PORTAUDIO_PROBE)
+    message(FATAL_ERROR "NOX_BUILD_PORTAUDIO_PROBE must be ON. PortAudio + Opus probe is required by default.")
+endif()
 if(NOX_BUILD_PORTAUDIO_PROBE)
     set(NOX_PORTAUDIO_HEADER_CANDIDATES
         "${NOX_LOCAL_DEPS_DIR}/portaudio/include/portaudio.h"
@@ -365,47 +369,47 @@ if(NOX_BUILD_PORTAUDIO_PROBE)
         endif()
     endforeach()
 
-    if(NOX_PORTAUDIO_HEADER AND NOX_PORTAUDIO_LIB)
-        get_filename_component(NOX_PORTAUDIO_INCLUDE_DIR "${NOX_PORTAUDIO_HEADER}" DIRECTORY)
+    if(NOT NOX_PORTAUDIO_HEADER OR NOT NOX_PORTAUDIO_LIB)
+        message(FATAL_ERROR "PortAudio probe is required but PortAudio header/lib was not found. Install under local-deps/portaudio or thirdparty/portaudio.")
+    endif()
 
-        add_executable(opus-portaudio-probe tools/opus_portaudio_probe.cpp)
-        target_include_directories(opus-portaudio-probe PRIVATE
-            ${NOX_PORTAUDIO_INCLUDE_DIR}
-            ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opus
-            ${NOX_LOCAL_DEPS_DIR}/opus/include
+    get_filename_component(NOX_PORTAUDIO_INCLUDE_DIR "${NOX_PORTAUDIO_HEADER}" DIRECTORY)
+
+    add_executable(opus-portaudio-probe tools/opus_portaudio_probe.cpp)
+    target_include_directories(opus-portaudio-probe PRIVATE
+        ${NOX_PORTAUDIO_INCLUDE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opus
+        ${NOX_LOCAL_DEPS_DIR}/opus/include
+    )
+    target_link_libraries(opus-portaudio-probe PRIVATE "${NOX_PORTAUDIO_LIB}" "${NOX_OPUS_LIB}")
+
+    if(WIN32)
+        target_link_libraries(opus-portaudio-probe PRIVATE ws2_32)
+    endif()
+
+    set(NOX_PORTAUDIO_DLL "")
+    foreach(_nox_dll IN LISTS NOX_PORTAUDIO_DLL_CANDIDATES)
+        if(EXISTS "${_nox_dll}")
+            set(NOX_PORTAUDIO_DLL "${_nox_dll}")
+            break()
+        endif()
+    endforeach()
+
+    if(NOX_OPUS_DLL)
+        add_custom_command(TARGET opus-portaudio-probe POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${NOX_OPUS_DLL}"
+                "$<TARGET_FILE_DIR:opus-portaudio-probe>/opus.dll"
+            COMMENT "Copying Opus runtime DLL beside opus-portaudio-probe"
         )
-        target_link_libraries(opus-portaudio-probe PRIVATE "${NOX_PORTAUDIO_LIB}" "${NOX_OPUS_LIB}")
+    endif()
 
-        if(WIN32)
-            target_link_libraries(opus-portaudio-probe PRIVATE ws2_32)
-        endif()
-
-        set(NOX_PORTAUDIO_DLL "")
-        foreach(_nox_dll IN LISTS NOX_PORTAUDIO_DLL_CANDIDATES)
-            if(EXISTS "${_nox_dll}")
-                set(NOX_PORTAUDIO_DLL "${_nox_dll}")
-                break()
-            endif()
-        endforeach()
-
-        if(NOX_OPUS_DLL)
-            add_custom_command(TARGET opus-portaudio-probe POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${NOX_OPUS_DLL}"
-                    "$<TARGET_FILE_DIR:opus-portaudio-probe>/opus.dll"
-                COMMENT "Copying Opus runtime DLL beside opus-portaudio-probe"
-            )
-        endif()
-
-        if(NOX_PORTAUDIO_DLL)
-            add_custom_command(TARGET opus-portaudio-probe POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${NOX_PORTAUDIO_DLL}"
-                    "$<TARGET_FILE_DIR:opus-portaudio-probe>/portaudio.dll"
-                COMMENT "Copying PortAudio runtime DLL beside opus-portaudio-probe"
-            )
-        endif()
-    else()
-        message(STATUS "Skipping opus-portaudio-probe: PortAudio header/lib not found (expected under local-deps/portaudio or thirdparty/portaudio).")
+    if(NOX_PORTAUDIO_DLL)
+        add_custom_command(TARGET opus-portaudio-probe POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${NOX_PORTAUDIO_DLL}"
+                "$<TARGET_FILE_DIR:opus-portaudio-probe>/portaudio.dll"
+            COMMENT "Copying PortAudio runtime DLL beside opus-portaudio-probe"
+        )
     endif()
 endif()

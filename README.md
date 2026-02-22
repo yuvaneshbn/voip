@@ -51,12 +51,13 @@ Additional targets:
 - `nox-asio-server`
 - `nox-asio-client`
 - `nox-control-proto` (generated from `shared/protocol/control.proto`)
-- `opus-portaudio-probe` (only when PortAudio is available locally)
+- `opus-portaudio-probe`
 
 Current defaults in `CMakeLists.txt`:
 - `NOX_ENABLE_SPEEXDSP_AEC=ON` (required)
 - `NOX_ENABLE_ASIO_BACKEND=ON` (required)
 - `NOX_ENABLE_PROTOBUF_CONTROL=ON` (required)
+- `NOX_BUILD_PORTAUDIO_PROBE=ON` (required)
 
 ## 4. Repository Structure
 
@@ -174,7 +175,7 @@ cmake --build build-mingw --target clean
 cmake --build build-mingw -j4
 ```
 
-### Optional: PortAudio + Opus Probe Target
+### PortAudio + Opus Probe Target
 
 An additional executable `opus-portaudio-probe` is available for validating:
 - mic capture -> Opus encode -> immediate decode -> speaker playback (`loopback` mode)
@@ -190,7 +191,7 @@ local-deps/
     portaudio.dll (or bin/portaudio.dll)
 ```
 
-If PortAudio is missing, CMake skips this target automatically.
+If PortAudio headers/libs are missing, CMake fails configuration because this target is required.
 
 Run examples:
 
@@ -308,7 +309,6 @@ cmake -S . -B build-mingw -DNOX_LOCAL_DEPS_DIR="$PWD/local-deps" -DQt6_DIR="$PWD
 
 ## 12. Known Limitations
 
-- `opus-portaudio-probe` is skipped if PortAudio headers/libs are not present.
 - `windeployqt` output can vary by Qt install/backend availability (for example optional DirectX compiler DLL warnings).
 
 ## 13. License / Third-Party
