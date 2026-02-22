@@ -9,6 +9,15 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
+# Prefer a repo-local Qt 6 distribution when present.
+set(LOCAL_QT6_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/local-deps/qt6" CACHE PATH
+    "Path to local Qt6 root (contains bin/, include/, lib/cmake/Qt6)")
+if(EXISTS "${LOCAL_QT6_ROOT}/lib/cmake/Qt6/Qt6Config.cmake")
+    list(PREPEND CMAKE_PREFIX_PATH "${LOCAL_QT6_ROOT}")
+    list(PREPEND CMAKE_PREFIX_PATH "${LOCAL_QT6_ROOT}/lib/cmake")
+    message(STATUS "Using local Qt6 from: ${LOCAL_QT6_ROOT}")
+endif()
+
 if(WIN32)
     if(NOT MSVC)
         execute_process(
@@ -60,6 +69,15 @@ if(QT_PACKAGE_DIR)
     set(_QT_PLUGIN_CANDIDATE "${QT_PACKAGE_DIR}/../../../plugins/platforms/qwindows.dll")
     if(EXISTS "${_QT_PLUGIN_CANDIDATE}")
         set(QT_QWINDOWS_PLUGIN "${_QT_PLUGIN_CANDIDATE}")
+    endif()
+endif()
+
+set(QT_RUNTIME_BIN_DIR "")
+if(QT_PACKAGE_DIR)
+    cmake_path(NORMAL_PATH QT_PACKAGE_DIR)
+    set(_QT_RUNTIME_CANDIDATE "${QT_PACKAGE_DIR}/../../../bin")
+    if(EXISTS "${_QT_RUNTIME_CANDIDATE}")
+        set(QT_RUNTIME_BIN_DIR "${_QT_RUNTIME_CANDIDATE}")
     endif()
 endif()
 
@@ -260,6 +278,30 @@ if(WIN32)
                 --dir "$<TARGET_FILE_DIR:voip_client>"
                 "$<TARGET_FILE:voip_client>"
         )
+    endif()
+
+    # If local Qt6 is present, copy runtime DLLs/plugins directly so the app
+    # runs even without global Qt in PATH.
+    if(EXISTS "${LOCAL_QT6_ROOT}/bin")
+        file(GLOB LOCAL_QT6_RUNTIME_DLLS "${LOCAL_QT6_ROOT}/bin/Qt6*.dll")
+        if(LOCAL_QT6_RUNTIME_DLLS)
+            add_custom_command(TARGET voip_client POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${LOCAL_QT6_RUNTIME_DLLS}
+                    $<TARGET_FILE_DIR:voip_client>
+                COMMAND_EXPAND_LISTS
+            )
+        endif()
+
+        if(EXISTS "${LOCAL_QT6_ROOT}/plugins/platforms/qwindows.dll")
+            add_custom_command(TARGET voip_client POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    $<TARGET_FILE_DIR:voip_client>/platforms
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${LOCAL_QT6_ROOT}/plugins/platforms/qwindows.dll"
+                    $<TARGET_FILE_DIR:voip_client>/platforms
+            )
+        endif()
     endif()
 
 endif()

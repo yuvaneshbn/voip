@@ -2,6 +2,31 @@
 
 LAN-based UDP VoIP application built with Qt 6 (C++20), with a control server and desktop client for real-time local network voice communication.
 
+## Local Qt6 Setup (Current Project)
+
+This repo now supports linking Qt from a local SDK folder:
+
+- `local-deps/qt6/include`
+- `local-deps/qt6/lib/cmake/Qt6`
+- `local-deps/qt6/bin` (Qt6 runtime DLLs)
+- `local-deps/qt6/plugins/platforms/qwindows.dll`
+
+`CMakeLists.txt` prefers `local-deps/qt6` automatically when present, and post-build copies local Qt6 DLLs/plugins beside `voip_client.exe`.
+
+### Configure + Build (Windows)
+
+```powershell
+cmake -S . -B build -DLOCAL_QT6_ROOT="$PWD/local-deps/qt6"
+cmake --build build --config Release --target voip_sfu voip_client
+```
+
+### Run
+
+```powershell
+.\build\Release\voip_sfu.exe
+.\build\Release\voip_client.exe
+```
+
 ## 1. What This Project Does
 
 The app allows clients on the same network to:

@@ -66,6 +66,17 @@ FORMS += \
 DEFINES += HAVE_CONFIG_H
 
 win32 {
+    LOCAL_QT6_ROOT = $$clean_path($$PWD/../local-deps/qt6)
+    exists($$LOCAL_QT6_ROOT/include) {
+        INCLUDEPATH += \
+            $$LOCAL_QT6_ROOT/include \
+            $$LOCAL_QT6_ROOT/include/QtCore \
+            $$LOCAL_QT6_ROOT/include/QtGui \
+            $$LOCAL_QT6_ROOT/include/QtWidgets \
+            $$LOCAL_QT6_ROOT/include/QtNetwork \
+            $$LOCAL_QT6_ROOT/include/QtMultimedia
+    }
+
     LIBS += -lws2_32 -lwinmm -lole32 -luuid
     contains(QMAKE_TARGET.arch, x86): OPUS_LIB = $$PWD/../thirdparty/opus/win32/opus.lib
     else: OPUS_LIB = $$PWD/../thirdparty/opus/opus.lib
@@ -87,5 +98,22 @@ win32 {
         OPUS_SRC_WIN = $$replace(OPUS_DLL, /, \\)
         OPUS_DST_WIN = $$replace(TARGET_OUT_DIR, /, \\)\\opus.dll
         QMAKE_POST_LINK += cmd /c copy /Y \"$$OPUS_SRC_WIN\" \"$$OPUS_DST_WIN\" $$escape_expand(\\n\\t)
+    }
+
+    QT_BIN_DIR = $$LOCAL_QT6_ROOT/bin
+    exists($$QT_BIN_DIR/Qt6Core.dll) {
+        qt_dlls = Qt6Core.dll Qt6Gui.dll Qt6Widgets.dll Qt6Network.dll Qt6Multimedia.dll
+        for(dll, qt_dlls) {
+            QT_DLL_SRC = $$replace($$QT_BIN_DIR/$$dll, /, \\)
+            QT_DLL_DST = $$replace(TARGET_OUT_DIR, /, \\)\\$$dll
+            QMAKE_POST_LINK += cmd /c copy /Y \"$$QT_DLL_SRC\" \"$$QT_DLL_DST\" $$escape_expand(\\n\\t)
+        }
+    }
+
+    QT_QWINDOWS_DLL = $$replace($$LOCAL_QT6_ROOT/plugins/platforms/qwindows.dll, /, \\)
+    exists($$LOCAL_QT6_ROOT/plugins/platforms/qwindows.dll) {
+        TARGET_OUT_DIR_WIN = $$replace(TARGET_OUT_DIR, /, \\)
+        QMAKE_POST_LINK += cmd /c if not exist \"$$TARGET_OUT_DIR_WIN\\platforms\" mkdir \"$$TARGET_OUT_DIR_WIN\\platforms\" $$escape_expand(\\n\\t)
+        QMAKE_POST_LINK += cmd /c copy /Y \"$$QT_QWINDOWS_DLL\" \"$$TARGET_OUT_DIR_WIN\\platforms\\qwindows.dll\" $$escape_expand(\\n\\t)
     }
 }
