@@ -1,0 +1,90 @@
+# Build directories
+/build*/
+/cmake-build-*/
+/dist/
+
+# CMake generated files
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/Makefile
+/compile_commands.json
+/install_manifest.txt
+
+# Qt generated files
+*.pro.user
+*.pro.user.*
+*.qmake.stash
+*.moc
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# Compiler / linker outputs
+*.obj
+*.o
+*.lo
+*.a
+*.lib
+*.dll
+*.exe
+*.exp
+*.pdb
+*.ilk
+
+# Allow required local Qt runtime/import libs for portable builds
+!local-deps/qt6/bin/
+!local-deps/qt6/bin/Qt6Core.dll
+!local-deps/qt6/bin/Qt6Gui.dll
+!local-deps/qt6/bin/Qt6Widgets.dll
+!local-deps/qt6/bin/Qt6Network.dll
+!local-deps/qt6/bin/Qt6Multimedia.dll
+!local-deps/qt6/bin/Qt6OpenGL.dll
+!local-deps/qt6/bin/Qt6OpenGLWidgets.dll
+!local-deps/qt6/bin/Qt6MultimediaWidgets.dll
+!local-deps/qt6/bin/libgcc_s_seh-1.dll
+!local-deps/qt6/bin/libstdc++-6.dll
+!local-deps/qt6/bin/libwinpthread-1.dll
+!local-deps/qt6/bin/avcodec-61.dll
+!local-deps/qt6/bin/avformat-61.dll
+!local-deps/qt6/bin/avutil-59.dll
+!local-deps/qt6/bin/swresample-5.dll
+!local-deps/qt6/bin/swscale-8.dll
+!local-deps/qt6/lib/
+!local-deps/qt6/lib/libQt6Core.a
+!local-deps/qt6/lib/libQt6Gui.a
+!local-deps/qt6/lib/libQt6Widgets.a
+!local-deps/qt6/lib/libQt6Network.a
+!local-deps/qt6/lib/libQt6Multimedia.a
+!local-deps/qt6/lib/libQt6OpenGL.a
+!local-deps/qt6/lib/libQt6OpenGLWidgets.a
+!local-deps/qt6/lib/libQt6MultimediaWidgets.a
+!local-deps/qt6/lib/libQt6EntryPoint.a
+!local-deps/qt6/plugins/
+!local-deps/qt6/plugins/platforms/
+!local-deps/qt6/plugins/platforms/qwindows.dll
+!local-deps/qt6/plugins/multimedia/
+!local-deps/qt6/plugins/multimedia/ffmpegmediaplugin.dll
+!local-deps/qt6/plugins/multimedia/windowsmediaplugin.dll
+
+# Logs and temp files
+*.log
+*.tmp
+*.cache
+*.bak
+*.swp
+*.swo
+*~
+
+# IDE/editor files
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

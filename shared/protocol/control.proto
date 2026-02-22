@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package nox.control.v1;
+
+message Hello {
+  string client_name = 1;
+  uint32 udp_port = 2;
+  uint32 protocol_version = 3;
+}
+
+message HelloAck {
+  uint32 client_id = 1;
+  uint32 protocol_version = 2;
+}
+
+message Join {
+  uint32 client_id = 1;
+  string name = 2;
+  uint32 udp_port = 3;
+  string room = 4;
+}
+
+message Leave {
+  uint32 client_id = 1;
+}
+
+message Talk {
+  uint32 client_id = 1;
+  repeated uint32 targets = 2;
+}
+
+message Subscribe {
+  uint32 client_id = 1;
+  repeated uint32 sources = 2;
+  uint32 max_streams = 3;
+  bool filter_enabled = 4;
+  string preferred_layer = 5;
+}
+
+message Ping {
+  uint64 ping_id = 1;
+}
+
+message Pong {
+  uint64 ping_id = 1;
+}
+
+message VoiceFeedback {
+  uint32 reporter_client_id = 1;
+  uint32 source_client_id = 2;
+  uint32 loss_pct = 3;
+  uint32 jitter_ms = 4;
+  uint32 plc_pct = 5;
+  uint32 fec_pct = 6;
+  uint32 rtt_ms = 7;
+}
+
+message UserInfo {
+  uint32 client_id = 1;
+  string name = 2;
+  bool online = 3;
+  string room = 4;
+}
+
+message Users {
+  repeated UserInfo users = 1;
+}
+
+message ListUsers {
+}
+
+message ControlEnvelope {
+  oneof payload {
+    Hello hello = 1;
+    HelloAck hello_ack = 2;
+    Join join = 3;
+    Leave leave = 4;
+    Talk talk = 5;
+    Subscribe subscribe = 6;
+    Ping ping = 7;
+    Pong pong = 8;
+    VoiceFeedback voice_feedback = 9;
+    ListUsers list_users = 10;
+    Users users = 11;
+  }
+}
